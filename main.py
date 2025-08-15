@@ -1,123 +1,118 @@
-import os
 import json
-from datetime import datetime
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+import logging
+import os
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Bot
 from telegram.ext import (
-    ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
+    ApplicationBuilder, CommandHandler, CallbackQueryHandler,
+    MessageHandler, filters, ContextTypes
 )
+from dotenv import load_dotenv
 
-# ===== Файли для збереження =====
-MOVIES_FILE = "movies.json"
-STATS_FILE = "user_stats.json"
+TOKEN = "ТОКЕН_ТВОГО_БОТА"
+ADMIN_ID = 123456789  # заміни на свій Telegram ID
+# ===== Завантажуємо токен і ID з .env =====
+load_dotenv()
+TOKEN = os.getenv("BOT_TOKEN")
+ADMIN_ID = int(os.getenv("ADMIN_ID"))
 
 # ===== Завантаження даних =====
-if os.path.exists(MOVIES_FILE):
-    with open(MOVIES_FILE, "r", encoding="utf-8") as f:
+# ===== Завантаження фільмів =====
+try:
+    with open("movies.json", "r", encoding="utf-8") as f:
         movies = json.load(f)
-else:
-    movies = {}  # {код: {"title": "назва", "link": "посилання"}}
+except FileNotFoundError:
+    movies = {}
 
-if os.path.exists(STATS_FILE):
-    with open(STATS_FILE, "r", encoding="utf-8") as f:
+# ===== Завантаження реакцій =====
+try:
+    with open("reactions.json", "r", encoding="utf-8") as f:
+        reactions = json.load(f)
+except FileNotFoundError:
+    reactions = {}
+
+# ===== Завантаження користувачів =====
+try:
+    with open("users.json", "r", encoding="utf-8") as f:
         user_stats = json.load(f)
-else:
-    user_stats = {}  # {user_id: {"name": str, "visits": int, "last_active": str}}
+except FileNotFoundError:
+    user_stats = {}
 
-# ===== Параметри =====
-TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
+# ===== Збереження даних =====
+# ===== Функції збереження =====
+def save_reactions():
+    with open("reactions.json", "w", encoding="utf-8") as f:
+        json.dump(reactions, f, ensure_ascii=False, indent=2)
+@@ -31,13 +43,7 @@
+    with open("users.json", "w", encoding="utf-8") as f:
+        json.dump(user_stats, f, ensure_ascii=False, indent=2)
 
-# ===== Допоміжні функції =====
-def save_movies():
-    with open(MOVIES_FILE, "w", encoding="utf-8") as f:
-        json.dump(movies, f, ensure_ascii=False, indent=4)
+# ===== Список фільмів =====
+movies = {
+    "film1": {"title": "Фільм 1", "desc": "Опис фільму 1", "link": "https://example.com/1"},
+    "film2": {"title": "Фільм 2", "desc": "Опис фільму 2", "link": "https://example.com/2"},
+}
 
-def save_stats():
-    with open(STATS_FILE, "w", encoding="utf-8") as f:
-        json.dump(user_stats, f, ensure_ascii=False, indent=4)
-
-def update_user_stats(user):
-    user_id = str(user.id)
-    user_name = user.username or user.full_name
-    stats = user_stats.get(user_id, {"name": user_name, "visits": 0, "last_active": ""})
-    stats["visits"] += 1
-    stats["last_active"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    user_stats[user_id] = stats
-    save_stats()
-
-def get_main_keyboard():
+# ===== Клавіатура фільму =====
+# ===== Генерація клавіатури фільму =====
+def get_film_keyboard(share_text, movie_code):
+    movie_reacts = reactions.get(movie_code, {"like": [], "dislike": [], "laugh": [], "heart": [], "poop": []})
     keyboard = [
-        [InlineKeyboardButton("🎲 Рандомний фільм", callback_data="random_film")],
-        [InlineKeyboardButton("💬 Підтримка", callback_data="support")]
-    ]
-    return InlineKeyboardMarkup(keyboard)
+@@ -66,7 +72,14 @@
+        user_stats[str(user_id)]["visits"] += 1
+    save_users()
 
-# ===== Команди =====
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    update_user_stats(update.effective_user)
-    await update.message.reply_text(
-        "Привіт! Введи код фільму, щоб отримати його, або натисни кнопку.",
-        reply_markup=get_main_keyboard()
-    )
-
-# ===== Callback для кнопок =====
-async def random_film_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    query.answer()
+    await update.message.reply_text("🎬 Привіт! Обери фільм:", reply_markup=get_film_keyboard("Поділися цим фільмом!", "film1"))
     if movies:
-        code, film = random.choice(list(movies.items()))
-        await query.message.reply_text(f"🎬 {film['title']}\n🔗 {film['link']}\nКод: {code}")
-    else:
-        await query.message.reply_text("Список фільмів порожній.")
-
-async def support_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    query.answer()
-    await query.message.reply_text("💬 Надішліть повідомлення, і я передам його адміну.")
-
-# ===== Обробка повідомлень =====
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    text = update.message.text.strip()
-    update_user_stats(user)
-
-    if text in movies:
-        film = movies[text]
-        await update.message.reply_text(f"🎬 {film['title']}\n🔗 {film['link']}")
-    else:
-        # Повідомлення до підтримки
-        await context.bot.send_message(
-            chat_id=ADMIN_ID,
-            text=f"📩 Повідомлення від {user.full_name} (ID: {user.id}):\n{text}"
+        first_movie_code = next(iter(movies))
+        await update.message.reply_text(
+            "🎬 Привіт! Ось перший фільм:",
+            reply_markup=get_film_keyboard("Поділися цим фільмом!", first_movie_code)
         )
-        await update.message.reply_text("✅ Ваше повідомлення надіслано адміністрації.")
+    else:
+        await update.message.reply_text("❌ Немає доступних фільмів.")
 
-# ===== Статистика для адміна =====
 async def send_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("❌ Тільки адмін може переглядати статистику.")
-        return
+@@ -100,39 +113,38 @@
+    if movie_code not in reactions:
+        reactions[movie_code] = {"like": [], "dislike": [], "laugh": [], "heart": [], "poop": []}
 
-    text = "📊 Статистика користувачів:\n\n"
-    for uid, info in user_stats.items():
-        text += f"👤 {info['name']} (ID: {uid}) — відвідувань: {info['visits']}, остання активність: {info['last_active']}\n"
-    await update.message.reply_text(text)
+    # Прибираємо з інших реакцій
+    for key in reactions[movie_code]:
+        if user_id in reactions[movie_code][key] and key != reaction_type:
+            reactions[movie_code][key].remove(user_id)
 
-# ===== Основна функція =====
-async def main():
+    # Перемикаємо поточну реакцію
+    if user_id in reactions[movie_code][reaction_type]:
+        reactions[movie_code][reaction_type].remove(user_id)
+    else:
+        reactions[movie_code][reaction_type].append(user_id)
+
+    save_reactions()
+
+    share_text = f"🎬 {movies[movie_code]['title']}\n\n{movies[movie_code]['desc']}\n\n{movies[movie_code]['link']}"
+    movie_data = movies.get(movie_code, {"title": "Невідомо", "desc": "", "link": ""})
+    share_text = f"🎬 {movie_data['title']}\n\n{movie_data['desc']}\n\n{movie_data['link']}"
+    await query.message.edit_reply_markup(reply_markup=get_film_keyboard(share_text, movie_code))
+    await query.answer("✅ Реакція збережена!")
+
+# ===== Головний запуск =====
+# ===== Запуск бота =====
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
+    bot = Bot(TOKEN)
+    try:
+        bot.delete_webhook(drop_pending_updates=True)
+        print("✅ Webhook видалено, старі оновлення очищені.")
+    except Exception as e:
+        print(f"⚠ Не вдалося видалити webhook: {e}")
+
     app = ApplicationBuilder().token(TOKEN).build()
-    
+
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("stats", send_stats))
+    app.add_handler(CommandHandler("sendall", send_all))
+    app.add_handler(CallbackQueryHandler(reaction_callback, pattern="^react_"))
 
-    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
-
-    app.add_handler(CallbackQueryHandler(random_film_callback, pattern="random_film"))
-    app.add_handler(CallbackQueryHandler(support_callback, pattern="support"))
-
-    await app.start()
-    print("Бот запущено...")
-    await app.idle()
-
-import asyncio
-asyncio.run(main())
+    print("🚀 Бот запущений...")
+    app.run_polling(allowed_updates=Update.ALL_TYPES)

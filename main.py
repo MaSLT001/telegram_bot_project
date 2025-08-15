@@ -83,7 +83,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     save_stats()
 
     await update.message.reply_text(
-        "Привіт! Натисни кнопку для рандомного фільму або введи код фільму.",
+        "Привіт! Введи код фільму, або натисни кнопку для рандомного вибору фільму.",
         reply_markup=get_main_keyboard()
     )
 

@@ -1,7 +1,7 @@
+import os
+import json
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
-import json
-import os
 
 # ===== Завантаження фільмів =====
 try:
@@ -18,8 +18,16 @@ if os.path.exists(STATS_FILE):
 else:
     user_stats = {}
 
-TOKEN = "TOKEN"
-ADMIN_ID = 123456789  # заміни на свій Telegram ID
+# ===== Параметри з Environment Variables =====
+TOKEN = os.getenv("BOT_TOKEN")
+ADMIN_ID = os.getenv("ADMIN_ID")
+
+if not TOKEN:
+    raise ValueError("BOT_TOKEN is not set in environment variables.")
+if not ADMIN_ID:
+    raise ValueError("ADMIN_ID is not set in environment variables.")
+
+ADMIN_ID = int(ADMIN_ID)
 
 support_mode_users = set()
 reply_mode_admin = {}  # {admin_id: user_id_to_reply}
@@ -162,4 +170,3 @@ if __name__ == "__main__":
 
     print("Бот запущений...")
     app.run_polling()
-

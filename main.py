@@ -24,9 +24,9 @@ TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = os.getenv("ADMIN_ID")
 
 if not TOKEN:
-    raise ValueError("BOT_TOKEN is not set in environment variables.")
+    raise ValueError("BOT_TOKEN is not set.")
 if not ADMIN_ID:
-    raise ValueError("ADMIN_ID is not set in environment variables.")
+    raise ValueError("ADMIN_ID is not set.")
 
 ADMIN_ID = int(ADMIN_ID)
 
@@ -50,6 +50,27 @@ def get_film_keyboard(share_text):
         ]
     ])
 
+# ===== Показ фільму =====
+async def show_film(update: Update, context: ContextTypes.DEFAULT_TYPE, code: str):
+    if code not in movies:
+        msg = "❌ Фільм з таким кодом не знайдено."
+        if update.message:
+            await update.message.reply_text(msg, reply_markup=get_main_keyboard())
+        elif update.callback_query:
+            await update.callback_query.message.reply_text(msg, reply_markup=get_main_keyboard())
+        return
+
+    film = movies[code]
+    text = f"🎬 *{film['title']}*\n\n{film['desc']}\n\n🔗 {film['link']}"
+
+    keyboard = get_film_keyboard(text)
+
+    if update.message:
+        await update.message.reply_text(text, parse_mode="Markdown", reply_markup=keyboard)
+    elif update.callback_query:
+        await update.callback_query.message.reply_text(text, parse_mode="Markdown", reply_markup=keyboard)
+        await update.callback_query.answer()
+
 # ===== Команди =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
@@ -62,22 +83,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     save_stats()
 
     await update.message.reply_text(
-        "Привіт! Введіть код фільму або натисніть кнопку 🎲 Рандомний фільм",
+        "Привіт! Введи код фільму або обери рандомний фільм.",
         reply_markup=get_main_keyboard()
     )
 
-# ===== Показ фільму =====
-async def show_film(update: Update, context: ContextTypes.DEFAULT_TYPE, code: str):
-    if code not in movies:
-        await update.message.reply_text("❌ Фільм з таким кодом не знайдено.", reply_markup=get_main_keyboard())
-        return
-    film = movies[code]
-    text = f"🎬 *{film['title']}*\n\n{film['desc']}\n\n🔗 {film['link']}"
-    await update.message.reply_text(
-        text,
-        parse_mode="Markdown",
-        reply_markup=get_film_keyboard(share_text=text)
-    )
+async def find_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    code = update.message.text.strip()
+    await show_film(update, context, code)
 
 # ===== Рандомний фільм =====
 async def random_film_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -86,11 +98,6 @@ async def random_film_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         await query.answer("❌ Список фільмів порожній.")
         return
     code = random.choice(list(movies.keys()))
-    await show_film(update, context, code)
-    await query.answer()
-
-async def find_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    code = update.message.text.strip()
     await show_film(update, context, code)
 
 # ===== Підтримка =====
@@ -152,47 +159,6 @@ async def stop_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("⚠ Ви не в режимі відповіді.")
 
-# ===== Розсилка =====
-async def broadcast(context: ContextTypes.DEFAULT_TYPE, text: str):
-    for user_id in user_stats.keys():
-        try:
-            await context.bot.send_message(chat_id=user_id, text=text)
-        except Exception as e:
-            print(f"Не вдалося відправити користувачу {user_id}: {e}")
-
-async def send_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("У вас немає прав для цієї команди.")
-        return
-    if not context.args:
-        await update.message.reply_text("Використання: /sendall текст_повідомлення")
-        return
-
-    text = " ".join(context.args)
-    await broadcast(context, text)
-    await update.message.reply_text("✅ Повідомлення надіслано всім користувачам.")
-
-# ===== Статистика =====
-async def send_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("У вас немає прав для цієї команди.")
-        return
-
-    total_users = len(user_stats)
-    total_visits = sum(user["visits"] for user in user_stats.values())
-
-    text = f"📊 Статистика користувачів:\n\n"
-    text += f"👥 Загальна кількість користувачів: {total_users}\n"
-    text += f"📈 Загальна кількість відвідувань: {total_visits}\n\n"
-    text += "🔹 Відвідування по користувачах:\n"
-
-    for user_id, info in user_stats.items():
-        name = info.get("name", "Unknown")
-        visits = info.get("visits", 0)
-        text += f"- {name} (ID: {user_id}): {visits} відвідувань\n"
-
-    await update.message.reply_text(text)
-
 # ===== Збереження =====
 def save_stats():
     with open(STATS_FILE, "w", encoding="utf-8") as f:
@@ -210,9 +176,7 @@ if __name__ == "__main__":
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("sendall", send_all))
     app.add_handler(CommandHandler("stopreply", stop_reply))
-    app.add_handler(CommandHandler("stats", send_stats))
     app.add_handler(CallbackQueryHandler(support_callback, pattern="^support$"))
     app.add_handler(CallbackQueryHandler(reply_callback, pattern="^reply_"))
     app.add_handler(CallbackQueryHandler(random_film_callback, pattern="^random_film$"))

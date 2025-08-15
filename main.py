@@ -36,20 +36,17 @@ reply_mode_admin = {}  # {admin_id: user_id_to_reply}
 # ===== Клавіатури =====
 def get_main_keyboard():
     return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("🎲 Рандомний фільм", callback_data="random_film"),
-            InlineKeyboardButton("💬 Підтримка", callback_data="support")
-        ]
+        [InlineKeyboardButton("🎲 Рандомний фільм", callback_data="random_film")]
     ])
 
-def get_film_keyboard(share_text, code):
+def get_film_keyboard(share_text):
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("🎲 Рандомний фільм", callback_data="random_film"),
+            InlineKeyboardButton("🔗 Поділитися", switch_inline_query=share_text),
             InlineKeyboardButton("💬 Підтримка", callback_data="support")
         ],
         [
-            InlineKeyboardButton("🔗 Поділитися", switch_inline_query=share_text)
+            InlineKeyboardButton("🎲 Рандомний фільм", callback_data="random_film")
         ]
     ])
 
@@ -65,8 +62,21 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     save_stats()
 
     await update.message.reply_text(
-        "Привіт! Введи код фільму, щоб отримати інформацію або обери рандомний фільм.",
+        "Привіт! Введіть код фільму або натисніть кнопку 🎲 Рандомний фільм",
         reply_markup=get_main_keyboard()
+    )
+
+# ===== Показ фільму =====
+async def show_film(update: Update, context: ContextTypes.DEFAULT_TYPE, code: str):
+    if code not in movies:
+        await update.message.reply_text("❌ Фільм з таким кодом не знайдено.", reply_markup=get_main_keyboard())
+        return
+    film = movies[code]
+    text = f"🎬 *{film['title']}*\n\n{film['desc']}\n\n🔗 {film['link']}"
+    await update.message.reply_text(
+        text,
+        parse_mode="Markdown",
+        reply_markup=get_film_keyboard(share_text=text)
     )
 
 # ===== Рандомний фільм =====
@@ -76,27 +86,12 @@ async def random_film_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         await query.answer("❌ Список фільмів порожній.")
         return
     code = random.choice(list(movies.keys()))
-    film = movies[code]
-    text = f"🎬 *{film['title']}*\n\n{film['desc']}\n\n🔗 {film['link']}"
-    await query.message.reply_text(
-        text,
-        parse_mode="Markdown",
-        reply_markup=get_film_keyboard(share_text=text, code=code)
-    )
+    await show_film(update, context, code)
     await query.answer()
 
 async def find_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
     code = update.message.text.strip()
-    if code in movies:
-        film = movies[code]
-        text = f"🎬 *{film['title']}*\n\n{film['desc']}\n\n🔗 {film['link']}"
-        await update.message.reply_text(
-            text,
-            parse_mode="Markdown",
-            reply_markup=get_film_keyboard(share_text=text, code=code)
-        )
-    else:
-        await update.message.reply_text("❌ Фільм з таким кодом не знайдено.", reply_markup=get_main_keyboard())
+    await show_film(update, context, code)
 
 # ===== Підтримка =====
 async def support_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -219,9 +214,9 @@ if __name__ == "__main__":
     app.add_handler(CommandHandler("stopreply", stop_reply))
     app.add_handler(CommandHandler("stats", send_stats))
     app.add_handler(CallbackQueryHandler(support_callback, pattern="^support$"))
-    app.add_handler(CallbackQueryHandler(random_film_callback, pattern="^random_film$"))
     app.add_handler(CallbackQueryHandler(reply_callback, pattern="^reply_"))
-    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_support_message))
+    app.add_handler(CallbackQueryHandler(random_film_callback, pattern="^random_film$"))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_support_message))
 
-    print("Бот запущено...")
+    print("Бот запущений...")
     app.run_polling()

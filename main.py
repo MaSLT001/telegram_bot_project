@@ -1,7 +1,7 @@
 import os
 import json
 import random
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Bot
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler,
     CallbackQueryHandler, ContextTypes, filters
@@ -22,14 +22,6 @@ if os.path.exists(STATS_FILE):
 else:
     user_stats = {}
 
-# ===== Реакції =====
-REACTIONS_FILE = "reactions.json"
-if os.path.exists(REACTIONS_FILE):
-    with open(REACTIONS_FILE, "r", encoding="utf-8") as f:
-        reactions = json.load(f)
-else:
-    reactions = {}
-
 # ===== Параметри =====
 TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
@@ -47,18 +39,13 @@ def get_main_keyboard():
     ])
 
 def get_film_keyboard(share_text, movie_code):
-    movie_reacts = reactions.get(movie_code, {})
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton("🔗 Поділитися", switch_inline_query=share_text),
             InlineKeyboardButton("💬 Підтримка", callback_data="support")
         ],
         [
-            InlineKeyboardButton(f"👍 {len(movie_reacts.get('like', []))}", callback_data=f"react_{movie_code}_like"),
-            InlineKeyboardButton(f"👎 {len(movie_reacts.get('dislike', []))}", callback_data=f"react_{movie_code}_dislike"),
-            InlineKeyboardButton(f"😂 {len(movie_reacts.get('laugh', []))}", callback_data=f"react_{movie_code}_laugh"),
-            InlineKeyboardButton(f"❤️ {len(movie_reacts.get('heart', []))}", callback_data=f"react_{movie_code}_heart"),
-            InlineKeyboardButton(f"💩 {len(movie_reacts.get('poop', []))}", callback_data=f"react_{movie_code}_poop")
+            InlineKeyboardButton("🎲 Рандомний фільм", callback_data="random_film")
         ]
     ])
 
@@ -66,10 +53,6 @@ def get_film_keyboard(share_text, movie_code):
 def save_stats():
     with open(STATS_FILE, "w", encoding="utf-8") as f:
         json.dump(user_stats, f, ensure_ascii=False, indent=4)
-
-def save_reactions():
-    with open(REACTIONS_FILE, "w", encoding="utf-8") as f:
-        json.dump(reactions, f, ensure_ascii=False, indent=4)
 
 # ===== Команди =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -138,7 +121,7 @@ async def handle_support_message(update: Update, context: ContextTypes.DEFAULT_T
         await context.bot.send_message(
             chat_id=ADMIN_ID,
             text=f"📩 Нове повідомлення від користувача:\n👤 {username} (ID: {user_id})\n\n💬 {text}",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✏ Відповісти", callback_data=f"reply_{user_id}")]])
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✏ Відповісти", callback_data=f"reply_{user_id}")]] )
         )
         await update.message.reply_text("✅ Ваше повідомлення відправлено в підтримку.")
         support_mode_users.remove(user_id)
@@ -163,27 +146,6 @@ async def stop_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("🚪 Ви вийшли з режиму відповіді.")
     else:
         await update.message.reply_text("⚠ Ви не в режимі відповіді.")
-
-# ===== Реакції =====
-async def reaction_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    _, movie_code, reaction_type = query.data.split("_")
-    user_id = query.from_user.id
-
-    if movie_code not in reactions:
-        reactions[movie_code] = {"like": [], "dislike": [], "laugh": [], "heart": [], "poop": []}
-
-    for key in reactions[movie_code]:
-        if key != reaction_type and user_id in reactions[movie_code][key]:
-            reactions[movie_code][key].remove(user_id)
-
-    if user_id not in reactions[movie_code][reaction_type]:
-        reactions[movie_code][reaction_type].append(user_id)
-        save_reactions()
-
-    share_text = f"🎬 {movies[movie_code]['title']} - Поділися!"
-    await query.message.edit_reply_markup(reply_markup=get_film_keyboard(share_text, movie_code))
-    await query.answer(f"Ви проголосували {reaction_type}")
 
 # ===== Розсилка =====
 async def broadcast(context: ContextTypes.DEFAULT_TYPE, text: str):
@@ -231,7 +193,6 @@ if __name__ == "__main__":
     app.add_handler(CallbackQueryHandler(random_film_callback, pattern="random_film"))
     app.add_handler(CallbackQueryHandler(support_callback, pattern="support"))
     app.add_handler(CallbackQueryHandler(reply_callback, pattern="reply_"))
-    app.add_handler(CallbackQueryHandler(reaction_callback, pattern="react_"))
 
     print("Бот запущено...")
     app.run_polling()

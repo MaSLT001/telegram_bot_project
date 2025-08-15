@@ -1,2 +1,4 @@
 python-telegram-bot==20.4
 PyDrive
+gspread==5.7.2
+oauth2client==4.1.3

@@ -20,7 +20,7 @@ if os.path.exists(STATS_FILE):
     with open(STATS_FILE, "r", encoding="utf-8") as f:
         user_stats = json.load(f)
 else:
-    user_stats = {}
+    user_stats = {}  # {user_id: {name, username, visits, last_film}}
 
 # ===== Реакції =====
 REACTIONS_FILE = "reactions.json"
@@ -74,12 +74,11 @@ def save_reactions():
 # ===== Команди =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
-    user_name = update.effective_user.username or update.effective_user.full_name
+    username = update.effective_user.username or update.effective_user.full_name
 
-    user_stats[user_id] = {
-        "name": user_name,
-        "visits": user_stats.get(user_id, {}).get("visits", 0) + 1
-    }
+    user_stats[user_id] = user_stats.get(user_id, {})
+    user_stats[user_id]["name"] = username
+    user_stats[user_id]["visits"] = user_stats[user_id].get("visits", 0) + 1
     save_stats()
 
     await update.message.reply_text(
@@ -96,6 +95,12 @@ async def random_film_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     code = random.choice(list(movies.keys()))
     film = movies[code]
     text = f"🎬 *{film['title']}*\n\n{film['desc']}\n\n🔗 {film['link']}"
+
+    # зберігаємо останній переглянутий фільм
+    user_id = str(query.from_user.id)
+    user_stats[user_id]["last_film"] = code
+    save_stats()
+
     await query.message.reply_text(
         text, parse_mode="Markdown", reply_markup=get_film_keyboard(text, code)
     )
@@ -106,6 +111,11 @@ async def find_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if code in movies:
         film = movies[code]
         text = f"🎬 *{film['title']}*\n\n{film['desc']}\n\n🔗 {film['link']}"
+
+        user_id = str(update.effective_user.id)
+        user_stats[user_id]["last_film"] = code
+        save_stats()
+
         await update.message.reply_text(
             text, parse_mode="Markdown", reply_markup=get_film_keyboard(text, code)
         )

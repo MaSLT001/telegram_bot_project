@@ -1,2 +1,2 @@
-asyncpg
 python-telegram-bot==20.4
+asyncpg==0.29.0

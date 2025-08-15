@@ -1,6 +1,7 @@
 import os
 import json
 import random
+from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Bot
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler,
@@ -8,37 +9,35 @@ from telegram.ext import (
 )
 
 # ===== Завантаження фільмів =====
-try:
-    with open("movies.json", "r", encoding="utf-8") as f:
-        movies = json.load(f)
-except FileNotFoundError:
-    movies = {}
+with open("movies.json", "r", encoding="utf-8") as f:
+    movies = json.load(f)
 
-# ===== Статистика =====
+# ===== Файли статистики та реакцій =====
 STATS_FILE = "stats.json"
+REACTIONS_FILE = "reactions.json"
+
+# ===== Завантаження статистики =====
 if os.path.exists(STATS_FILE):
     with open(STATS_FILE, "r", encoding="utf-8") as f:
         user_stats = json.load(f)
 else:
-    user_stats = {}  # {user_id: {name, username, visits, last_film}}
+    user_stats = {}
 
-# ===== Реакції =====
-REACTIONS_FILE = "reactions.json"
+# ===== Завантаження реакцій =====
 if os.path.exists(REACTIONS_FILE):
     with open(REACTIONS_FILE, "r", encoding="utf-8") as f:
         reactions = json.load(f)
 else:
-    reactions = {}  # {movie_code: {reaction_type: [user_id, ...]}}
+    reactions = {}
 
 # ===== Параметри з Environment Variables =====
 TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
-
 if not TOKEN or not ADMIN_ID:
-    raise ValueError("BOT_TOKEN або ADMIN_ID не встановлені в environment variables.")
+    raise ValueError("BOT_TOKEN або ADMIN_ID не встановлені")
 
 support_mode_users = set()
-reply_mode_admin = {}  # {admin_id: user_id_to_reply}
+reply_mode_admin = {}
 
 # ===== Клавіатури =====
 def get_main_keyboard():
@@ -76,9 +75,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
     username = update.effective_user.username or update.effective_user.full_name
 
-    user_stats[user_id] = user_stats.get(user_id, {})
-    user_stats[user_id]["name"] = username
-    user_stats[user_id]["visits"] = user_stats[user_id].get("visits", 0) + 1
+    user_stats[user_id] = {
+        "name": username,
+        "visits": user_stats.get(user_id, {}).get("visits", 0) + 1,
+        "last_active": datetime.now().isoformat()
+    }
     save_stats()
 
     await update.message.reply_text(
@@ -95,15 +96,7 @@ async def random_film_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     code = random.choice(list(movies.keys()))
     film = movies[code]
     text = f"🎬 *{film['title']}*\n\n{film['desc']}\n\n🔗 {film['link']}"
-
-    # зберігаємо останній переглянутий фільм
-    user_id = str(query.from_user.id)
-    user_stats[user_id]["last_film"] = code
-    save_stats()
-
-    await query.message.reply_text(
-        text, parse_mode="Markdown", reply_markup=get_film_keyboard(text, code)
-    )
+    await query.message.reply_text(text, parse_mode="Markdown", reply_markup=get_film_keyboard(text, code))
     await query.answer()
 
 async def find_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -111,14 +104,7 @@ async def find_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if code in movies:
         film = movies[code]
         text = f"🎬 *{film['title']}*\n\n{film['desc']}\n\n🔗 {film['link']}"
-
-        user_id = str(update.effective_user.id)
-        user_stats[user_id]["last_film"] = code
-        save_stats()
-
-        await update.message.reply_text(
-            text, parse_mode="Markdown", reply_markup=get_film_keyboard(text, code)
-        )
+        await update.message.reply_text(text, parse_mode="Markdown", reply_markup=get_film_keyboard(text, code))
     else:
         await update.message.reply_text("❌ Фільм з таким кодом не знайдено.", reply_markup=get_main_keyboard())
 
@@ -183,13 +169,14 @@ async def reaction_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if movie_code not in reactions:
         reactions[movie_code] = {"like": [], "dislike": [], "laugh": [], "heart": [], "poop": []}
 
+    # Користувач може обрати тільки одну реакцію одночасно
     for key in reactions[movie_code]:
         if key != reaction_type and user_id in reactions[movie_code][key]:
             reactions[movie_code][key].remove(user_id)
 
     if user_id not in reactions[movie_code][reaction_type]:
         reactions[movie_code][reaction_type].append(user_id)
-
+    
     save_reactions()
 
     share_text = f"🎬 {movies[movie_code]['title']} - Поділися!"
@@ -221,7 +208,10 @@ async def send_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     total_users = len(user_stats)
     visits = sum(u.get("visits", 0) for u in user_stats.values())
-    await update.message.reply_text(f"👥 Користувачів: {total_users}\n📈 Відвідувань: {visits}")
+    stats_text = f"👥 Користувачів: {total_users}\n📈 Відвідувань: {visits}\n\nДеталі:\n"
+    for uid, info in user_stats.items():
+        stats_text += f"ID: {uid}, Name: {info['name']}, Visits: {info['visits']}, Last Active: {info['last_active']}\n"
+    await update.message.reply_text(stats_text)
 
 # ===== Запуск =====
 if __name__ == "__main__":
@@ -237,16 +227,27 @@ if __name__ == "__main__":
 
     app = ApplicationBuilder().token(TOKEN).build()
 
+    # Команди
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("stopreply", stop_reply))
     app.add_handler(CommandHandler("sendall", send_all))
     app.add_handler(CommandHandler("stats", send_stats))
 
+    # Callback
     app.add_handler(CallbackQueryHandler(support_callback, pattern="^support$"))
-    app.add_handler(CallbackQueryHandler(reply_callback, pattern="^reply_"))
+   
+    # Реакції
     app.add_handler(CallbackQueryHandler(reaction_callback, pattern="^react_"))
+
+    # Відповіді адміна
+    app.add_handler(CallbackQueryHandler(reply_callback, pattern="^reply_"))
+
+    # Рандомний фільм
     app.add_handler(CallbackQueryHandler(random_film_callback, pattern="^random_film$"))
+
+    # Повідомлення користувачів
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_support_message))
 
-    print("Бот запущений...")
+    # Запуск
+    print("Бот запущено!")
     app.run_polling()

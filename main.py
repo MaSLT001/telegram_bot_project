@@ -152,6 +152,27 @@ async def send_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await broadcast(context, text)
     await update.message.reply_text("✅ Повідомлення надіслано всім користувачам.")
 
+# ===== Статистика через Telegram =====
+async def send_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("У вас немає прав для цієї команди.")
+        return
+
+    total_users = len(user_stats)
+    total_visits = sum(user["visits"] for user in user_stats.values())
+
+    text = f"📊 Статистика користувачів:\n\n"
+    text += f"👥 Загальна кількість користувачів: {total_users}\n"
+    text += f"📈 Загальна кількість відвідувань: {total_visits}\n\n"
+    text += "🔹 Відвідування по користувачах:\n"
+
+    for user_id, info in user_stats.items():
+        name = info.get("name", "Unknown")
+        visits = info.get("visits", 0)
+        text += f"- {name} (ID: {user_id}): {visits} відвідувань\n"
+
+    await update.message.reply_text(text)
+
 # ===== Збереження статистики =====
 def save_stats():
     with open(STATS_FILE, "w", encoding="utf-8") as f:
@@ -164,10 +185,10 @@ if __name__ == "__main__":
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("sendall", send_all))
     app.add_handler(CommandHandler("stopreply", stop_reply))
+    app.add_handler(CommandHandler("stats", send_stats))  # <-- Додана команда статистики
     app.add_handler(CallbackQueryHandler(support_callback, pattern="^support$"))
     app.add_handler(CallbackQueryHandler(reply_callback, pattern="^reply_"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_support_message))
 
     print("Бот запущений...")
     app.run_polling()
-

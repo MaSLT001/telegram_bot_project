@@ -1,7 +1,6 @@
 import os
 import json
 import random
-from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Bot
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler,
@@ -29,9 +28,9 @@ if os.path.exists(REACTIONS_FILE):
     with open(REACTIONS_FILE, "r", encoding="utf-8") as f:
         reactions = json.load(f)
 else:
-    reactions = {}  # {movie_code: {reaction_type: [user_id, ...]}}
+    reactions = {}
 
-# ===== Параметри з Environment Variables =====
+# ===== Параметри =====
 TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
 
@@ -72,20 +71,16 @@ def save_reactions():
     with open(REACTIONS_FILE, "w", encoding="utf-8") as f:
         json.dump(reactions, f, ensure_ascii=False, indent=4)
 
-# ===== Оновлення статистики користувача =====
-def update_user_stats(user):
-    user_id = str(user.id)
-    user_name = user.username or user.full_name
-    user_stats[user_id] = {
-        "name": user_name,
-        "visits": user_stats.get(user_id, {}).get("visits", 0) + 1,
-        "last_active": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    }
-    save_stats()
-
 # ===== Команди =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    update_user_stats(update.effective_user)
+    user_id = str(update.effective_user.id)
+    user_name = update.effective_user.username or update.effective_user.full_name
+
+    user_stats[user_id] = {
+        "name": user_name,
+        "visits": user_stats.get(user_id, {}).get("visits", 0) + 1
+    }
+    save_stats()
 
     await update.message.reply_text(
         "Привіт! Можеш натиснути кнопку для рандомного фільму або ввести код фільму.",
@@ -107,7 +102,6 @@ async def random_film_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     await query.answer()
 
 async def find_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    update_user_stats(update.effective_user)
     code = update.message.text.strip()
     if code in movies:
         film = movies[code]
@@ -210,28 +204,20 @@ async def send_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await broadcast(context, text)
     await update.message.reply_text("✅ Повідомлення надіслано всім користувачам.")
 
-# ===== Детальна статистика =====
 async def send_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         await update.message.reply_text("❌ Тільки адмін може переглядати статистику.")
         return
-
-    total_users = len(user_stats)
-    visits = sum(u.get("visits", 0) for u in user_stats.values())
-
-    text = f"👥 Користувачів: {total_users} | 📈 Всього відвідувань: {visits}\n\n"
-    text += "📋 Коротка статистика для розсилки:\n\n"
-
-    for user_id, info in user_stats.items():
-        name = info.get("name", "Невідомо")
-        user_visits = info.get("visits", 0)
-        last_active = info.get("last_active", "-")
-        text += f"{name} | {user_id} | {user_visits} відвідувань | остання активність: {last_active}\n"
-
+    if not user_stats:
+        await update.message.reply_text("Статистика порожня.")
+        return
+    text = "📊 Статистика користувачів:\n\n"
+    for uid, info in user_stats.items():
+        text += f"👤 {info['name']} (ID: {uid}) — відвідувань: {info['visits']}\n"
     await update.message.reply_text(text)
 
-# ===== Основна функція =====
-async def main():
+# ===== Запуск =====
+if __name__ == "__main__":
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
@@ -240,16 +226,12 @@ async def main():
     app.add_handler(CommandHandler("stopreply", stop_reply))
 
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_support_message))
+    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), find_movie))
+
     app.add_handler(CallbackQueryHandler(random_film_callback, pattern="random_film"))
     app.add_handler(CallbackQueryHandler(support_callback, pattern="support"))
     app.add_handler(CallbackQueryHandler(reply_callback, pattern="reply_"))
     app.add_handler(CallbackQueryHandler(reaction_callback, pattern="react_"))
 
-    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), find_movie))
-
-    await app.start()
     print("Бот запущено...")
-    await app.idle()
-
-import asyncio
-asyncio.run(main())
+    app.run_polling()

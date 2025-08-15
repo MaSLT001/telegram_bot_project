@@ -1,49 +1,69 @@
 import os
 import json
 from datetime import datetime
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update
 from telegram.ext import (
-    ApplicationBuilder, CommandHandler, MessageHandler,
-    CallbackQueryHandler, ContextTypes, filters
+    ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters
 )
-from pydrive.auth import GoogleAuth
-from pydrive.drive import GoogleDrive
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
 
-# ====== Налаштування Google Drive ======
-gauth = GoogleAuth()
-gauth.LocalWebserverAuth()  # Або використовуйте .LoadCredentialsFile() для сервіс акаунту
-drive = GoogleDrive(gauth)
-
+# ===== Файли =====
 MOVIES_FILE = "movies.json"
-STATS_FILE = "stats.json"
+STATS_FILE = "user_stats.json"
+SERVICE_ACCOUNT_FILE = "/etc/secrets/service_account.json"
+SHEET_NAME = "BotStats"
 
-# ====== Завантаження/збереження на локальний файл ======
-def load_json(file_name):
-    if os.path.exists(file_name):
-        with open(file_name, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return {} if "stats" in file_name else {}
+# ===== Змінні =====
+TOKEN = os.getenv("BOT_TOKEN")
+ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
 
-def save_json(data, file_name):
-    with open(file_name, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-    # Збереження на Google Drive
-    file_list = drive.ListFile({'q': f"title='{file_name}'"}).GetList()
-    if file_list:
-        gfile = file_list[0]
-        gfile.SetContentFile(file_name)
-        gfile.Upload()
-    else:
-        gfile = drive.CreateFile({'title': file_name})
-        gfile.SetContentFile(file_name)
-        gfile.Upload()
+# ===== Завантаження фільмів =====
+if os.path.exists(MOVIES_FILE):
+    with open(MOVIES_FILE, "r", encoding="utf-8") as f:
+        movies = json.load(f)
+else:
+    movies = {}
 
-# ====== Дані ======
-movies = load_json(MOVIES_FILE)
-user_stats = load_json(STATS_FILE)
+# ===== Локальна статистика =====
+if os.path.exists(STATS_FILE):
+    with open(STATS_FILE, "r", encoding="utf-8") as f:
+        user_stats = json.load(f)
+else:
+    user_stats = {}
 
-# ====== Основні функції ======
-def update_user_stats(user):
+# ===== Збереження локальної статистики =====
+def save_stats():
+    with open(STATS_FILE, "w", encoding="utf-8") as f:
+        json.dump(user_stats, f, ensure_ascii=False, indent=4)
+
+# ===== Google Sheets =====
+scope = ["https://www.googleapis.com/auth/spreadsheets",
+         "https://www.googleapis.com/auth/drive"]
+creds = ServiceAccountCredentials.from_json_keyfile_name(SERVICE_ACCOUNT_FILE, scope)
+gc = gspread.authorize(creds)
+
+try:
+    sh = gc.open(SHEET_NAME)
+except gspread.SpreadsheetNotFound:
+    sh = gc.create(SHEET_NAME)
+    sh.share(None, perm_type='anyone', role='writer')
+worksheet = sh.sheet1
+
+# ===== Оновлення Google статистики =====
+def update_google_stats(user_id, user_name):
+    records = worksheet.get_all_records()
+    for i, record in enumerate(records, start=2):
+        if str(record.get("UserID")) == str(user_id):
+            visits = int(record.get("Visits", 0)) + 1
+            worksheet.update(f"C{i}", visits)
+            worksheet.update(f"D{i}", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+            return
+    # Якщо користувача немає — додаємо
+    worksheet.append_row([user_name, user_id, 1, datetime.now().strftime("%Y-%m-%d %H:%M:%S")])
+
+# ===== Оновлення користувача =====
+def update_user(user):
     user_id = str(user.id)
     user_name = user.username or user.full_name
     user_stats[user_id] = {
@@ -51,88 +71,47 @@ def update_user_stats(user):
         "visits": user_stats.get(user_id, {}).get("visits", 0) + 1,
         "last_active": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     }
-    save_json(user_stats, STATS_FILE)
+    save_stats()
+    update_google_stats(user_id, user_name)
 
-def get_main_keyboard():
-    keyboard = [
-        [InlineKeyboardButton("🎥 Випадковий фільм", callback_data="random_film")],
-        [InlineKeyboardButton("✉️ Написати в підтримку", callback_data="support")]
-    ]
-    return InlineKeyboardMarkup(keyboard)
-
-# ====== Команди ======
+# ===== Команди =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    update_user_stats(update.effective_user)
+    update_user(update.effective_user)
     await update.message.reply_text(
-        "Вітаю! Можеш натиснути кнопку для рандомного фільму або ввести код фільму.",
-        reply_markup=get_main_keyboard()
+        "Привіт! Введи код фільму, щоб отримати його назву та посилання."
     )
 
-async def random_film_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    import random
-    if not movies:
-        await update.callback_query.message.reply_text("Список фільмів порожній.")
-        return
-    code, film = random.choice(list(movies.items()))
-    await update.callback_query.message.reply_text(f"🎬 {film}")
-
+# ===== Пошук фільму =====
 async def find_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    update_user_stats(update.effective_user)
+    update_user(update.effective_user)
     code = update.message.text.strip()
-    if code in movies:
-        film = movies[code]
-        await update.message.reply_text(f"🎬 {film}")
+    film = movies.get(code)
+    if film:
+        text = f"🎬 {film.get('title')}\n🔗 {film.get('link')}"
     else:
-        await update.message.reply_text("❌ Фільм з таким кодом не знайдено.")
+        text = "❌ Фільм з таким кодом не знайдено."
+    await update.message.reply_text(text)
 
-async def support_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.callback_query.message.reply_text(
-        "Напишіть своє повідомлення, і воно буде передане адміну."
-    )
-
+# ===== Статистика для адміна =====
 async def send_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
     if update.effective_user.id != ADMIN_ID:
         await update.message.reply_text("❌ Тільки адмін може переглядати статистику.")
         return
 
     text = "📊 Статистика користувачів:\n\n"
     for uid, info in user_stats.items():
-        text += f"👤 {info['name']} (ID: {uid}) — відвідувань: {info['visits']} | остання активність: {info['last_active']}\n"
+        text += f"👤 {info['name']} (ID: {uid}) — відвідувань: {info['visits']}\n"
     await update.message.reply_text(text)
 
-async def add_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
-    if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("❌ Тільки адмін може додавати фільми.")
-        return
-
-    args = context.args
-    if len(args) < 3:
-        await update.message.reply_text("❌ Використання: /addmovie <код> <назва> <посилання>")
-        return
-
-    code = args[0]
-    name = args[1]
-    link = args[2]
-    movies[code] = f"{name} — {link}"
-    save_json(movies, MOVIES_FILE)
-    await update.message.reply_text(f"✅ Фільм додано: {name} ({code})")
-
-# ====== Основна функція ======
+# ===== Основна функція =====
 async def main():
-    TOKEN = os.getenv("BOT_TOKEN")
     app = ApplicationBuilder().token(TOKEN).build()
-
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("stats", send_stats))
-    app.add_handler(CommandHandler("addmovie", add_movie))
-    app.add_handler(CallbackQueryHandler(random_film_callback, pattern="random_film"))
-    app.add_handler(CallbackQueryHandler(support_callback, pattern="support"))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), find_movie))
 
-    print("Бот запущено...")
     await app.start()
+    print("Бот запущено...")
     await app.idle()
 
 import asyncio

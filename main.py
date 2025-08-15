@@ -25,20 +25,22 @@ else:
 # ===== Реакції =====
 REACTIONS_FILE = "reactions.json"
 if os.path.exists(REACTIONS_FILE):
-    with open(REACTIONS_FILE, "r", encoding="utf-8") as f:
-        reactions = json.load(f)
+    try:
+        with open(REACTIONS_FILE, "r", encoding="utf-8") as f:
+            reactions = json.load(f)
+    except json.JSONDecodeError:
+        reactions = {}
 else:
-    reactions = {}  # {movie_code: {reaction_type: [user_id, ...]}}
+    reactions = {}
 
 # ===== Параметри з Environment Variables =====
 TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
-
 if not TOKEN or not ADMIN_ID:
     raise ValueError("BOT_TOKEN або ADMIN_ID не встановлені в environment variables.")
 
 support_mode_users = set()
-reply_mode_admin = {}  # {admin_id: user_id_to_reply}
+reply_mode_admin = {}
 
 # ===== Клавіатури =====
 def get_main_keyboard():
@@ -83,7 +85,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     save_stats()
 
     await update.message.reply_text(
-        "Привіт! Введи код фільму, або натисни кнопку для рандомного вибору фільму.",
+        "Привіт! Можеш натиснути кнопку для рандомного фільму або ввести код фільму.",
         reply_markup=get_main_keyboard()
     )
 
@@ -170,17 +172,25 @@ async def reaction_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     _, movie_code, reaction_type = query.data.split("_")
     user_id = query.from_user.id
 
+    # Ініціалізація словника для фільму
     if movie_code not in reactions:
         reactions[movie_code] = {"like": [], "dislike": [], "laugh": [], "heart": [], "poop": []}
 
+    # Видаляємо попередні реакції користувача
     for key in reactions[movie_code]:
         if key != reaction_type and user_id in reactions[movie_code][key]:
             reactions[movie_code][key].remove(user_id)
 
+    # Додаємо або видаляємо обрану реакцію
     if user_id not in reactions[movie_code][reaction_type]:
         reactions[movie_code][reaction_type].append(user_id)
-        save_reactions()
+    else:
+        reactions[movie_code][reaction_type].remove(user_id)
 
+    # Зберігаємо зміни
+    save_reactions()
+
+    # Оновлюємо клавіатуру
     share_text = f"🎬 {movies[movie_code]['title']} - Поділися!"
     await query.message.edit_reply_markup(reply_markup=get_film_keyboard(share_text, movie_code))
     await query.answer(f"Ви проголосували {reaction_type}")
@@ -209,33 +219,20 @@ async def send_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Тільки адмін може переглядати статистику.")
         return
     total_users = len(user_stats)
-    visits = sum(u.get("visits", 0) for u in user_stats.values())
-    await update.message.reply_text(f"👥 Користувачів: {total_users}\n📈 Відвідувань: {visits}")
+    total_messages = sum(u.get("visits", 0) for u in user_stats.values())
+    await update.message.reply_text(f"👥 Користувачів: {total_users}\n✉ Повідомлень: {total_messages}")
 
-# ===== Запуск =====
-if __name__ == "__main__":
-    import logging
-    logging.basicConfig(level=logging.INFO)
-    
-    bot = Bot(TOKEN)
-    try:
-        bot.delete_webhook()
-        print("Webhook видалено, можна запускати polling.")
-    except Exception as e:
-        print(f"Не вдалося видалити webhook: {e}")
+# ===== Основна функція =====
+app = ApplicationBuilder().token(TOKEN).build()
+app.add_handler(CommandHandler("start", start))
+app.add_handler(CommandHandler("sendall", send_all))
+app.add_handler(CommandHandler("stats", send_stats))
+app.add_handler(CommandHandler("stopreply", stop_reply))
+app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_support_message))
+app.add_handler(CallbackQueryHandler(random_film_callback, pattern="^random_film$"))
+app.add_handler(CallbackQueryHandler(support_callback, pattern="^support$"))
+app.add_handler(CallbackQueryHandler(reply_callback, pattern="^reply_"))
+app.add_handler(CallbackQueryHandler(reaction_callback, pattern="^react_"))
 
-    app = ApplicationBuilder().token(TOKEN).build()
-
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("stopreply", stop_reply))
-    app.add_handler(CommandHandler("sendall", send_all))
-    app.add_handler(CommandHandler("stats", send_stats))
-
-    app.add_handler(CallbackQueryHandler(support_callback, pattern="^support$"))
-    app.add_handler(CallbackQueryHandler(reply_callback, pattern="^reply_"))
-    app.add_handler(CallbackQueryHandler(reaction_callback, pattern="^react_"))
-    app.add_handler(CallbackQueryHandler(random_film_callback, pattern="^random_film$"))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_support_message))
-
-    print("Бот запущений...")
-    app.run_polling()
+print("Бот запущено!")
+app.run_polling()

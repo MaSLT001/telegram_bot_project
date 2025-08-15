@@ -18,7 +18,7 @@ if os.path.exists(STATS_FILE):
 else:
     user_stats = {}
 
-TOKEN = "ТВОЙ_ТОКЕН"
+TOKEN = "TOKEN"
 ADMIN_ID = 123456789  # заміни на свій Telegram ID
 
 support_mode_users = set()
@@ -162,3 +162,4 @@ if __name__ == "__main__":
 
     print("Бот запущений...")
     app.run_polling()
+

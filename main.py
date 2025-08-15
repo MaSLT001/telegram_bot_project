@@ -42,7 +42,6 @@ except FileNotFoundError:
 def save_reactions():
     with open("reactions.json", "w", encoding="utf-8") as f:
         json.dump(reactions, f, ensure_ascii=False, indent=2)
-@@ -31,13 +43,7 @@
     with open("users.json", "w", encoding="utf-8") as f:
         json.dump(user_stats, f, ensure_ascii=False, indent=2)
 
@@ -57,7 +56,6 @@ movies = {
 def get_film_keyboard(share_text, movie_code):
     movie_reacts = reactions.get(movie_code, {"like": [], "dislike": [], "laugh": [], "heart": [], "poop": []})
     keyboard = [
-@@ -66,7 +72,14 @@
         user_stats[str(user_id)]["visits"] += 1
     save_users()
 
@@ -73,7 +71,6 @@ def get_film_keyboard(share_text, movie_code):
 
 async def send_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
-@@ -100,39 +113,38 @@
     if movie_code not in reactions:
         reactions[movie_code] = {"like": [], "dislike": [], "laugh": [], "heart": [], "poop": []}
 

@@ -79,7 +79,7 @@ async def support_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = query.from_user.id
     support_mode_users.add(user_id)
     await query.answer()
-    await query.message.reply_text("✍ Напишіть своє повідомлення для підтримки, і я передам його адміну.")
+    await query.message.reply_text("✍ Напишіть своє повідомлення для підтримки, і я передам його.")
 
 async def handle_support_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -170,3 +170,4 @@ if __name__ == "__main__":
 
     print("Бот запущений...")
     app.run_polling()
+

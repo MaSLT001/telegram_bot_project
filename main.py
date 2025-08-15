@@ -36,12 +36,21 @@ reply_mode_admin = {}  # {admin_id: user_id_to_reply}
 # ===== Клавіатури =====
 def get_main_keyboard():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🎲 Рандомний фільм", callback_data="random_film")]
+        [
+            InlineKeyboardButton("🎲 Рандомний фільм", callback_data="random_film"),
+            InlineKeyboardButton("💬 Підтримка", callback_data="support")
+        ]
     ])
 
-def get_film_keyboard(share_text):
+def get_film_keyboard(share_text, code):
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🎲 Рандомний фільм", callback_data="random_film")]
+        [
+            InlineKeyboardButton("🎲 Рандомний фільм", callback_data="random_film"),
+            InlineKeyboardButton("💬 Підтримка", callback_data="support")
+        ],
+        [
+            InlineKeyboardButton("🔗 Поділитися", switch_inline_query=share_text)
+        ]
     ])
 
 # ===== Команди =====
@@ -72,7 +81,7 @@ async def random_film_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     await query.message.reply_text(
         text,
         parse_mode="Markdown",
-        reply_markup=get_film_keyboard(share_text=text)
+        reply_markup=get_film_keyboard(share_text=text, code=code)
     )
     await query.answer()
 
@@ -84,7 +93,7 @@ async def find_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             text,
             parse_mode="Markdown",
-            reply_markup=get_film_keyboard(share_text=text)
+            reply_markup=get_film_keyboard(share_text=text, code=code)
         )
     else:
         await update.message.reply_text("❌ Фільм з таким кодом не знайдено.", reply_markup=get_main_keyboard())
@@ -210,9 +219,9 @@ if __name__ == "__main__":
     app.add_handler(CommandHandler("stopreply", stop_reply))
     app.add_handler(CommandHandler("stats", send_stats))
     app.add_handler(CallbackQueryHandler(support_callback, pattern="^support$"))
-    app.add_handler(CallbackQueryHandler(reply_callback, pattern="^reply_"))
     app.add_handler(CallbackQueryHandler(random_film_callback, pattern="^random_film$"))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_support_message))
+    app.add_handler(CallbackQueryHandler(reply_callback, pattern="^reply_"))
+    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_support_message))
 
-    print("Бот запущений...")
+    print("Бот запущено...")
     app.run_polling()

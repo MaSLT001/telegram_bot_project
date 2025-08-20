@@ -2,13 +2,13 @@ import os
 import json
 import random
 from github import Github
+from deep_translator import GoogleTranslator
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler,
     CallbackQueryHandler, filters, ContextTypes
 )
-from googletrans import Translator
-from thefuzz import process
+from difflib import get_close_matches
 
 # ===== ENV перемінні =====
 TOKEN = os.getenv("BOT_TOKEN")
@@ -20,35 +20,12 @@ GITHUB_REPO = os.getenv("GITHUB_REPO")
 if not TOKEN or not ADMIN_ID or not GITHUB_TOKEN or not GITHUB_OWNER or not GITHUB_REPO:
     raise ValueError("Перевірте, що всі змінні оточення встановлені")
 
-translator = Translator()
-
 # ===== Фільми =====
 try:
     with open("movies.json", "r", encoding="utf-8") as f:
         movies = json.load(f)
 except:
     movies = {}
-
-# ===== Кеш перекладів =====
-TRANSLATE_CACHE_FILE = "translate_cache.json"
-translate_cache = {}
-if os.path.exists(TRANSLATE_CACHE_FILE):
-    with open(TRANSLATE_CACHE_FILE, "r", encoding="utf-8") as f:
-        translate_cache = json.load(f)
-
-def translate_text(text: str) -> str:
-    """Переклад з кешем"""
-    if text.lower() in translate_cache:
-        return translate_cache[text.lower()]
-    try:
-        translated = translator.translate(text, src='ru', dest='uk').text
-    except:
-        translated = text
-    translate_cache[text.lower()] = translated
-    # Одразу зберігаємо кеш
-    with open(TRANSLATE_CACHE_FILE, "w", encoding="utf-8") as f:
-        json.dump(translate_cache, f, indent=2, ensure_ascii=False)
-    return translated
 
 # ===== Статистика =====
 STATS_FILE = "stats.json"
@@ -76,6 +53,14 @@ def save_stats():
     except Exception as e:
         print("❌ Помилка при збереженні на GitHub:", e)
 
+# ===== Переклад =====
+def translate_to_ukrainian(text):
+    try:
+        return GoogleTranslator(source='auto', target='uk').translate(text)
+    except Exception as e:
+        print("❌ Помилка перекладу:", e)
+        return text
+
 # ===== Клавіатури =====
 def main_keyboard():
     return InlineKeyboardMarkup([
@@ -94,24 +79,16 @@ def film_keyboard(text):
         ]
     ])
 
-# ===== Пошук фільму =====
-def find_film_by_name(name: str):
-    """Нечіткий пошук фільму по назві"""
-    titles = [f['title'] for f in movies.values()]
-    match, score = process.extractOne(name, titles)
-    if score >= 60:  # мінімальний поріг схожості
-        return next(f for f in movies.values() if f['title'] == match)
-    return None
-
 # ===== Показ фільму =====
 async def show_film(update: Update, context: ContextTypes.DEFAULT_TYPE, code: str):
-    translated = translate_text(code)
-
-    # Пошук по коду
     film = movies.get(code)
     if not film:
-        # Нечіткий пошук по назві
-        film = find_film_by_name(translated)
+        # Частковий та нечіткий пошук по назві
+        titles = [f['title'] for f in movies.values()]
+        code_lower = code.lower()
+        matches = get_close_matches(code_lower, [t.lower() for t in titles], n=1, cutoff=0.6)
+        if matches:
+            film = next((f for f in movies.values() if f['title'].lower() == matches[0].lower()), None)
     if not film:
         await update.message.reply_text("❌ Фільм не знайдено", reply_markup=main_keyboard())
         return
@@ -139,7 +116,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def movie_by_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    code = update.message.text.strip()
+    code_raw = update.message.text.strip()
+    code = translate_to_ukrainian(code_raw)
     uid = str(update.effective_user.id)
     if uid not in user_stats:
         user_stats[uid] = {"username": update.effective_user.username, "first_name": update.effective_user.first_name}

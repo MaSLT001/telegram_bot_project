@@ -38,6 +38,7 @@ if os.path.exists(STATS_FILE):
 def save_stats():
     with open(STATS_FILE, "w", encoding="utf-8") as f:
         json.dump(user_stats, f, indent=2, ensure_ascii=False)
+
     try:
         g = Github(GITHUB_TOKEN)
         repo = g.get_user(GITHUB_OWNER).get_repo(GITHUB_REPO)
@@ -59,7 +60,8 @@ def main_keyboard(is_admin=False):
     if is_admin:
         buttons.append([
             InlineKeyboardButton("📊 Статистика", callback_data="stats"),
-            InlineKeyboardButton("📢 Відправити всім", callback_data="send_all")
+            InlineKeyboardButton("📢 Відправити всім", callback_data="send_all"),
+            InlineKeyboardButton("📋 Меню", callback_data="menu")
         ])
     return InlineKeyboardMarkup(buttons)
 
@@ -67,12 +69,12 @@ def film_keyboard(text, is_admin=False):
     buttons = [
         [
             InlineKeyboardButton("🔗 Поділитися", switch_inline_query=text),
-            InlineKeyboardButton("💬 Підтримка", callback_data="support"),
-            InlineKeyboardButton("📋 Меню", callback_data="menu")
+            InlineKeyboardButton("💬 Підтримка", callback_data="support")
         ],
         [InlineKeyboardButton("🎲 Рандомний фільм", callback_data="random_film")]
     ]
     if is_admin:
+        buttons[0].append(InlineKeyboardButton("📋 Меню", callback_data="menu"))
         buttons.append([
             InlineKeyboardButton("📊 Статистика", callback_data="stats"),
             InlineKeyboardButton("📢 Відправити всім", callback_data="send_all")
@@ -87,21 +89,17 @@ def get_message(update: Update):
 def find_film_by_text(text):
     try:
         translated = GoogleTranslator(source='auto', target='uk').translate(text)
-    except Exception as e:
-        print("❌ Помилка перекладу:", e)
+    except:
         translated = text
 
-    # часткова назва
     for film in movies.values():
         if translated.lower() in film['title'].lower():
             return film
 
-    # схожі назви
     titles = [f['title'] for f in movies.values()]
-    matches = get_close_matches(translated, titles, n=1, cutoff=0.4)
+    matches = get_close_matches(translated, titles, n=1, cutoff=0.6)
     if matches:
         return next(f for f in movies.values() if f['title'] == matches[0])
-
     return None
 
 # ===== Показ фільму =====
@@ -113,6 +111,7 @@ async def show_film(update: Update, context: ContextTypes.DEFAULT_TYPE, code: st
     if not film:
         await message.reply_text("❌ Фільм не знайдено", reply_markup=main_keyboard(update.effective_user.id == ADMIN_ID))
         return
+
     text = f"🎬 *{film['title']}*\n\n{film['desc']}\n\n🔗 {film['link']}"
     await message.reply_text(text, parse_mode="Markdown", reply_markup=film_keyboard(text, update.effective_user.id == ADMIN_ID))
 
@@ -128,7 +127,16 @@ async def random_film(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     is_admin = user_id == ADMIN_ID
-    await update.callback_query.edit_message_text("📋 Головне меню", reply_markup=main_keyboard(is_admin))
+    await update.callback_query.edit_message_text(
+        "📋 Головне меню",
+        reply_markup=main_keyboard(is_admin)
+    )
+
+# ===== Підтримка =====
+async def support(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    message = update.callback_query.message
+    await message.reply_text("✉️ Звертайтесь у підтримку: @YourSupportUsername")
+    await update.callback_query.answer()
 
 # ===== Статистика =====
 async def show_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -189,6 +197,7 @@ def main():
     app.add_handler(CallbackQueryHandler(show_menu, pattern="^menu$"))
     app.add_handler(CallbackQueryHandler(show_stats, pattern="^stats$"))
     app.add_handler(CallbackQueryHandler(send_all_message, pattern="^send_all$"))
+    app.add_handler(CallbackQueryHandler(support, pattern="^support$"))
     print("✅ Бот запущений")
     app.run_polling()
 

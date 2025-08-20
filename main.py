@@ -19,12 +19,35 @@ GITHUB_REPO = os.getenv("GITHUB_REPO")
 if not TOKEN or not ADMIN_ID or not GITHUB_TOKEN or not GITHUB_OWNER or not GITHUB_REPO:
     raise ValueError("Перевірте, що всі змінні оточення встановлені")
 
+translator = Translator()
+
 # ===== Фільми =====
 try:
     with open("movies.json", "r", encoding="utf-8") as f:
         movies = json.load(f)
 except:
     movies = {}
+
+# ===== Кеш перекладів =====
+TRANSLATE_CACHE_FILE = "translate_cache.json"
+translate_cache = {}
+if os.path.exists(TRANSLATE_CACHE_FILE):
+    with open(TRANSLATE_CACHE_FILE, "r", encoding="utf-8") as f:
+        translate_cache = json.load(f)
+
+def translate_text(text: str) -> str:
+    """Переклад з кешем"""
+    if text.lower() in translate_cache:
+        return translate_cache[text.lower()]
+    try:
+        translated = translator.translate(text, src='ru', dest='uk').text
+    except:
+        translated = text
+    translate_cache[text.lower()] = translated
+    # Одразу зберігаємо кеш
+    with open(TRANSLATE_CACHE_FILE, "w", encoding="utf-8") as f:
+        json.dump(translate_cache, f, indent=2, ensure_ascii=False)
+    return translated
 
 # ===== Статистика =====
 STATS_FILE = "stats.json"
@@ -52,9 +75,6 @@ def save_stats():
     except Exception as e:
         print("❌ Помилка при збереженні на GitHub:", e)
 
-# ===== Переклад =====
-translator = Translator()
-
 # ===== Клавіатури =====
 def main_keyboard():
     return InlineKeyboardMarkup([
@@ -74,38 +94,18 @@ def film_keyboard(text):
     ])
 
 # ===== Показ фільму =====
-async def show_film(update: Update, context: ContextTypes.DEFAULT_TYPE, query_text: str):
-    # Переклад з російської на українську
-    try:
-        translated = translator.translate(query_text, src='ru', dest='uk').text
-    except:
-        translated = query_text
+async def show_film(update: Update, context: ContextTypes.DEFAULT_TYPE, code: str):
+    translated = translate_text(code)
 
-    # Пошук за кодом
-    film = movies.get(translated)
+    # Пошук по коду або назві
+    film = movies.get(code)
     if not film:
-        # Пошук по частковій назві (case-insensitive)
-        matches = [(c, f) for c, f in movies.items() if translated.lower() in f['title'].lower()]
-        if not matches:
-            await update.message.reply_text("❌ Фільм не знайдено", reply_markup=main_keyboard())
-            return
-        # Кнопки для вибору
-        keyboard = [[InlineKeyboardButton(f['title'], callback_data=f"show_{c}")] for c, f in matches[:10]]
-        await update.message.reply_text(
-            "🔎 Знайдено кілька збігів. Оберіть фільм:",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
+        film = next((f for f in movies.values() if f['title'].lower() == translated.lower()), None)
+    if not film:
+        await update.message.reply_text("❌ Фільм не знайдено", reply_markup=main_keyboard())
         return
-    # Показ фільму
     text = f"🎬 *{film['title']}*\n\n{film['desc']}\n\n🔗 {film['link']}"
     await update.message.reply_text(text, parse_mode="Markdown", reply_markup=film_keyboard(text))
-
-async def show_film_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    if query.data.startswith("show_"):
-        code = query.data.replace("show_", "")
-        await show_film(query, context, code)
-        await query.answer()
 
 async def random_film(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not movies:
@@ -123,7 +123,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_stats[uid] = {"username": user.username, "first_name": user.first_name}
         save_stats()
     await update.message.reply_text(
-        f"Привіт, {user.first_name}!👋 Введи код фільму або назву, або натисни кнопку нижче щоб ми запропонували фільм😉",
+        f"Привіт, {user.first_name}!👋 Введи код фільму або натисни кнопку нижче щоб ми тобі запропонували фільм😉",
         reply_markup=main_keyboard()
     )
 
@@ -141,7 +141,6 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, movie_by_code))
     app.add_handler(CallbackQueryHandler(random_film, pattern="^random_film$"))
-    app.add_handler(CallbackQueryHandler(show_film_callback, pattern="^show_"))
     print("✅ Бот запущений")
     app.run_polling()
 

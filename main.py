@@ -4,19 +4,20 @@ import random
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler,
-    CallbackQueryHandler, filters, ContextTypes
+    CallbackQueryHandler, filters, ContextTypes, ConversationHandler
 )
 
 # ===== ENV перемінні =====
 TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = os.getenv("ADMIN_ID")
+ADMIN_ID = os.getenv("ADMIN_ID")  # початковий адмін
 
 if not TOKEN:
     raise ValueError("BOT_TOKEN не встановлено")
 if not ADMIN_ID:
     raise ValueError("ADMIN_ID не встановлено")
 
-ADMIN_ID = int(ADMIN_ID)
+# ===== Адміни =====
+ADMINS = [int(ADMIN_ID)]
 
 # ===== Фільми =====
 try:
@@ -56,10 +57,9 @@ def film_keyboard(text):
 
 def admin_keyboard():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📊 Статистика", callback_data="admin_stats")],
-        [InlineKeyboardButton("📢 Розсилка", callback_data="admin_broadcast")],
-        [InlineKeyboardButton("➕ Додати адміна", callback_data="admin_add")],
-        [InlineKeyboardButton("🚪 Вийти з режиму broadcast", callback_data="admin_stopbroadcast")]
+        [InlineKeyboardButton("📊 Статистика", callback_data="stats")],
+        [InlineKeyboardButton("📢 Розсилка", callback_data="sendall_admin")],
+        [InlineKeyboardButton("➕ Додати адміна", callback_data="add_admin")]
     ])
 
 # ===== Показ фільму =====
@@ -86,21 +86,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if uid not in user_stats:
         user_stats[uid] = {"username": user.username, "first_name": user.first_name}
         save_stats()
-
-    keyboard = main_keyboard()
-    # Показати адмін-меню лише для адміністраторів
-    if 'admins' not in context.bot_data:
-        context.bot_data['admins'] = {ADMIN_ID}
-    if user.id in context.bot_data['admins']:
-        keyboard.inline_keyboard.extend(admin_keyboard().inline_keyboard)
-
     await update.message.reply_text(
-        f"Привіт, {user.first_name}!👋 Введи код фільму або натисни кнопку нижче.",
-        reply_markup=keyboard
+        f"Привіт, {user.first_name}!👋 Введи код фільму або натисни кнопку нижче щоб ми тобі запропонували фільм😉",
+        reply_markup=main_keyboard()
     )
 
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id not in context.bot_data.get('admins', {ADMIN_ID}):
+    if update.effective_user.id not in ADMINS:
         return
     total = len(user_stats)
     users_list = "\n".join(
@@ -130,7 +122,7 @@ async def handle_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
 
     # Адмін відповідає
-    if user_id in reply_mode_admin:
+    if user_id in ADMINS and user_id in reply_mode_admin:
         target_id = reply_mode_admin[user_id]
         try:
             await context.bot.send_message(chat_id=target_id, text=f"📩 Відповідь від підтримки:\n{text}")
@@ -142,7 +134,7 @@ async def handle_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Користувач пише в підтримку
     if user_id in support_mode_users:
         await context.bot.send_message(
-            chat_id=ADMIN_ID,
+            chat_id=ADMINS[0],  # повідомлення йде первинному адміну
             text=f"📩 Нове повідомлення від @{update.effective_user.username} ({user_id}):\n{text}",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("✏ Відповісти", callback_data=f"reply_{user_id}")]
@@ -163,7 +155,7 @@ async def reply_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.message.reply_text("✍ Введіть повідомлення для користувача або /stopreply щоб вийти")
 
 async def stop_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id in reply_mode_admin:
+    if update.effective_user.id in ADMINS and update.effective_user.id in reply_mode_admin:
         del reply_mode_admin[update.effective_user.id]
         await update.message.reply_text("🚪 Вийшли з режиму відповіді")
     else:
@@ -171,7 +163,7 @@ async def stop_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ===== Розсилка =====
 async def sendall(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id not in context.bot_data.get('admins', {ADMIN_ID}):
+    if update.effective_user.id not in ADMINS:
         return
     if not context.args:
         await update.message.reply_text("⚠ Використання: /sendall <текст>")
@@ -186,7 +178,7 @@ async def sendall(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def confirm_sendall(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    if query.from_user.id not in context.bot_data.get('admins', {ADMIN_ID}) or query.from_user.id not in pending_broadcasts:
+    if query.from_user.id not in ADMINS or query.from_user.id not in pending_broadcasts:
         return
     text_to_send = pending_broadcasts.pop(query.from_user.id)
     users = list(user_stats.keys())
@@ -210,82 +202,70 @@ async def confirm_sendall(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cancel_sendall(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    if query.from_user.id not in context.bot_data.get('admins', {ADMIN_ID}):
+    if query.from_user.id not in ADMINS:
         return
     if query.from_user.id in pending_broadcasts:
         pending_broadcasts.pop(query.from_user.id)
     await query.message.reply_text("🚫 Розсилка скасована")
 
-# ===== Адмін-меню callback =====
-async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ===== Додавання нового адміна =====
+ADD_ADMIN = 1
+pending_new_admins = {}
+
+async def add_admin_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    user_id = query.from_user.id
+    if query.from_user.id not in ADMINS:
+        await query.answer("❌ Ви не адмін")
+        return
     await query.answer()
-    if user_id not in context.bot_data.get('admins', {ADMIN_ID}):
-        await query.message.reply_text("❌ Доступ заборонено")
-        return
+    await query.message.reply_text("Введіть ID користувача, якого хочете зробити адміном:")
+    pending_new_admins[query.from_user.id] = True
+    return ADD_ADMIN
 
-    if query.data == "admin_stats":
-        await stats(update, context)
-    elif query.data == "admin_broadcast":
-        await query.message.reply_text("✏ Введіть текст для розсилки:")
-        context.user_data['broadcast_mode'] = True
-    elif query.data == "admin_add":
-        await query.message.reply_text("✏ Введіть user_id нового адміністратора:")
-        context.user_data['add_admin_mode'] = True
-    elif query.data == "admin_stopbroadcast":
-        context.user_data.pop('broadcast_mode', None)
-        await query.message.reply_text("🚪 Вийшли з режиму broadcast")
-
-# ===== Обробка тексту адміністратора =====
-async def handle_admin_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    text = update.message.text
-
-    if user_id not in context.bot_data.get('admins', {ADMIN_ID}):
-        # Звичайний користувач
-        await handle_support(update, context)
-        return
-
-    # Broadcast
-    if context.user_data.get('broadcast_mode'):
-        for uid in user_stats.keys():
-            try:
-                await context.bot.send_message(uid, f"📢 {text}")
-            except:
-                pass
-        await update.message.reply_text("✅ Розсилка завершена")
-        context.user_data['broadcast_mode'] = False
-        return
-
-    # Додавання нового адміна
-    if context.user_data.get('add_admin_mode'):
-        try:
-            new_admin = int(text)
-            admins = context.bot_data.get('admins', {ADMIN_ID})
-            admins.add(new_admin)
-            context.bot_data['admins'] = admins
-            await update.message.reply_text(f"✅ Користувач {new_admin} доданий як адміністратор")
-        except:
-            await update.message.reply_text("⚠ Неправильний формат. Введіть лише user_id числами")
-        context.user_data['add_admin_mode'] = False
-        return
-
-    # Звичайний код фільму
-    await movie_by_code(update, context)
+async def receive_new_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        new_admin_id = int(update.message.text)
+    except ValueError:
+        await update.message.reply_text("❌ Помилка: введіть числовий ID")
+        return ADD_ADMIN
+    if new_admin_id in ADMINS:
+        await update.message.reply_text("⚠ Цей користувач вже адмін")
+    else:
+        ADMINS.append(new_admin_id)
+        await update.message.reply_text(f"✅ Користувач {new_admin_id} доданий як адмін")
+    pending_new_admins.pop(update.effective_user.id, None)
+    return ConversationHandler.END
 
 # ===== Main =====
-app = ApplicationBuilder().token(TOKEN).build()
+def main():
+    app = ApplicationBuilder().token(TOKEN).build()
 
-app.add_handler(CommandHandler("start", start))
-app.add_handler(CommandHandler("stopreply", stop_reply))
-app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_admin_text))
-app.add_handler(CallbackQueryHandler(admin_callback, pattern="^admin_"))
-app.add_handler(CallbackQueryHandler(random_film, pattern="^random_film$"))
-app.add_handler(CallbackQueryHandler(support_button, pattern="^support$"))
-app.add_handler(CallbackQueryHandler(reply_callback, pattern="^reply_"))
-app.add_handler(CallbackQueryHandler(confirm_sendall, pattern="^confirm_sendall$"))
-app.add_handler(CallbackQueryHandler(cancel_sendall, pattern="^cancel_sendall$"))
+    # Команди
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("stats", stats))
+    app.add_handler(CommandHandler("stopreply", stop_reply))
+    app.add_handler(CommandHandler("sendall", sendall))
 
-print("Бот запущено...")
-app.run_polling()
+    # Callback
+    app.add_handler(CallbackQueryHandler(random_film, pattern="^random_film$"))
+    app.add_handler(CallbackQueryHandler(support_button, pattern="^support$"))
+    app.add_handler(CallbackQueryHandler(reply_callback, pattern="^reply_"))
+    app.add_handler(CallbackQueryHandler(confirm_sendall, pattern="^confirm_sendall$"))
+    app.add_handler(CallbackQueryHandler(cancel_sendall, pattern="^cancel_sendall$"))
+
+    # Додавання нового адміна
+    conv_add_admin = ConversationHandler(
+        entry_points=[CallbackQueryHandler(add_admin_button, pattern="^add_admin$")],
+        states={ADD_ADMIN: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_new_admin)]},
+        fallbacks=[]
+    )
+    app.add_handler(conv_add_admin)
+
+    # Повідомлення
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_support))
+
+    print("✅ Бот запущений")
+    app.run_polling()
+
+if __name__ == "__main__":
+    main()

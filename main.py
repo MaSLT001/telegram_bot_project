@@ -10,7 +10,7 @@ from telegram.ext import (
 from deep_translator import GoogleTranslator
 from difflib import get_close_matches
 
-# ===== ENV перемінні =====
+# ===== ENV змінні =====
 TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID"))
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
@@ -38,7 +38,7 @@ if os.path.exists(STATS_FILE):
 def save_stats():
     with open(STATS_FILE, "w", encoding="utf-8") as f:
         json.dump(user_stats, f, indent=2, ensure_ascii=False)
-    
+
     try:
         g = Github(GITHUB_TOKEN)
         repo = g.get_user(GITHUB_OWNER).get_repo(GITHUB_REPO)
@@ -80,6 +80,10 @@ def film_keyboard(text, is_admin=False):
         ])
     return InlineKeyboardMarkup(buttons)
 
+# ===== Допоміжна =====
+def get_message(update: Update):
+    return update.message or update.callback_query.message
+
 # ===== Пошук фільму =====
 def find_film_by_text(text):
     try:
@@ -102,18 +106,20 @@ async def show_film(update: Update, context: ContextTypes.DEFAULT_TYPE, code: st
     film = movies.get(code)
     if not film:
         film = find_film_by_text(code)
+    message = get_message(update)
     if not film:
-        await update.message.reply_text("❌ Фільм не знайдено", reply_markup=main_keyboard(update.effective_user.id==ADMIN_ID))
+        await message.reply_text("❌ Фільм не знайдено", reply_markup=main_keyboard(update.effective_user.id == ADMIN_ID))
         return
+
     text = f"🎬 *{film['title']}*\n\n{film['desc']}\n\n🔗 {film['link']}"
-    await update.message.reply_text(text, parse_mode="Markdown", reply_markup=film_keyboard(text, update.effective_user.id==ADMIN_ID))
+    await message.reply_text(text, parse_mode="Markdown", reply_markup=film_keyboard(text, update.effective_user.id == ADMIN_ID))
 
 async def random_film(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not movies:
         await update.callback_query.answer("❌ Список фільмів порожній.")
         return
     code = random.choice(list(movies.keys()))
-    await show_film(update.callback_query, context, code)
+    await show_film(update, context, code)
     await update.callback_query.answer()
 
 # ===== Меню =====
@@ -161,7 +167,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         save_stats()
     await update.message.reply_text(
         f"Привіт, {user.first_name}!👋 Введи код фільму або натисни кнопку нижче щоб ми тобі запропонували фільм😉",
-        reply_markup=main_keyboard(uid==str(ADMIN_ID))
+        reply_markup=main_keyboard(user.id == ADMIN_ID)
     )
 
 async def movie_by_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -170,7 +176,6 @@ async def movie_by_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if uid not in user_stats:
         user_stats[uid] = {"username": update.effective_user.username, "first_name": update.effective_user.first_name}
     save_stats()
-    # Перевірка, чи це повідомлення для розсилки
     if context.user_data.get('send_all'):
         await handle_send_all(update, context)
         return

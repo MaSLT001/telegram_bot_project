@@ -8,6 +8,7 @@ from telegram.ext import (
     CallbackQueryHandler, filters, ContextTypes
 )
 from googletrans import Translator
+from thefuzz import process
 
 # ===== ENV перемінні =====
 TOKEN = os.getenv("BOT_TOKEN")
@@ -93,14 +94,24 @@ def film_keyboard(text):
         ]
     ])
 
+# ===== Пошук фільму =====
+def find_film_by_name(name: str):
+    """Нечіткий пошук фільму по назві"""
+    titles = [f['title'] for f in movies.values()]
+    match, score = process.extractOne(name, titles)
+    if score >= 60:  # мінімальний поріг схожості
+        return next(f for f in movies.values() if f['title'] == match)
+    return None
+
 # ===== Показ фільму =====
 async def show_film(update: Update, context: ContextTypes.DEFAULT_TYPE, code: str):
     translated = translate_text(code)
 
-    # Пошук по коду або назві
+    # Пошук по коду
     film = movies.get(code)
     if not film:
-        film = next((f for f in movies.values() if f['title'].lower() == translated.lower()), None)
+        # Нечіткий пошук по назві
+        film = find_film_by_name(translated)
     if not film:
         await update.message.reply_text("❌ Фільм не знайдено", reply_markup=main_keyboard())
         return

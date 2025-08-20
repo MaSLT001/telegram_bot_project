@@ -38,7 +38,6 @@ if os.path.exists(STATS_FILE):
 def save_stats():
     with open(STATS_FILE, "w", encoding="utf-8") as f:
         json.dump(user_stats, f, indent=2, ensure_ascii=False)
-
     try:
         g = Github(GITHUB_TOKEN)
         repo = g.get_user(GITHUB_OWNER).get_repo(GITHUB_REPO)
@@ -59,9 +58,9 @@ def main_keyboard(is_admin=False):
     ]
     if is_admin:
         buttons.append([
+            InlineKeyboardButton("📋 Меню", callback_data="menu"),
             InlineKeyboardButton("📊 Статистика", callback_data="stats"),
-            InlineKeyboardButton("📢 Відправити всім", callback_data="send_all"),
-            InlineKeyboardButton("📋 Меню", callback_data="menu")
+            InlineKeyboardButton("📢 Відправити всім", callback_data="send_all")
         ])
     return InlineKeyboardMarkup(buttons)
 
@@ -74,8 +73,8 @@ def film_keyboard(text, is_admin=False):
         [InlineKeyboardButton("🎲 Рандомний фільм", callback_data="random_film")]
     ]
     if is_admin:
-        buttons[0].append(InlineKeyboardButton("📋 Меню", callback_data="menu"))
         buttons.append([
+            InlineKeyboardButton("📋 Меню", callback_data="menu"),
             InlineKeyboardButton("📊 Статистика", callback_data="stats"),
             InlineKeyboardButton("📢 Відправити всім", callback_data="send_all")
         ])
@@ -92,12 +91,14 @@ def find_film_by_text(text):
     except:
         translated = text
 
+    # точний збіг
     for film in movies.values():
-        if translated.lower() in film['title'].lower():
+        if film['title'].lower() == translated.lower():
             return film
 
+    # неповна назва
     titles = [f['title'] for f in movies.values()]
-    matches = get_close_matches(translated, titles, n=1, cutoff=0.6)
+    matches = get_close_matches(translated, titles, n=1, cutoff=0.5)
     if matches:
         return next(f for f in movies.values() if f['title'] == matches[0])
     return None
@@ -111,7 +112,6 @@ async def show_film(update: Update, context: ContextTypes.DEFAULT_TYPE, code: st
     if not film:
         await message.reply_text("❌ Фільм не знайдено", reply_markup=main_keyboard(update.effective_user.id == ADMIN_ID))
         return
-
     text = f"🎬 *{film['title']}*\n\n{film['desc']}\n\n🔗 {film['link']}"
     await message.reply_text(text, parse_mode="Markdown", reply_markup=film_keyboard(text, update.effective_user.id == ADMIN_ID))
 
@@ -125,18 +125,13 @@ async def random_film(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ===== Меню =====
 async def show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    is_admin = user_id == ADMIN_ID
+    if update.effective_user.id != ADMIN_ID:
+        await update.callback_query.answer("❌ Немає доступу", show_alert=True)
+        return
     await update.callback_query.edit_message_text(
         "📋 Головне меню",
-        reply_markup=main_keyboard(is_admin)
+        reply_markup=main_keyboard(True)
     )
-
-# ===== Підтримка =====
-async def support(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    message = update.callback_query.message
-    await message.reply_text("✉️ Звертайтесь у підтримку: @YourSupportUsername")
-    await update.callback_query.answer()
 
 # ===== Статистика =====
 async def show_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -165,6 +160,49 @@ async def handle_send_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data['send_all'] = False
         await update.message.reply_text("✅ Повідомлення надіслано всім користувачам", reply_markup=main_keyboard(True))
 
+# ===== Підтримка =====
+async def support_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['support'] = True
+    await update.callback_query.answer()
+    await update.callback_query.message.reply_text(
+        "✉️ Напишіть своє повідомлення для підтримки, і я передам його."
+    )
+
+async def handle_support_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if context.user_data.get('support'):
+        user = update.effective_user
+        text = update.message.text
+        context.user_data['support'] = False
+
+        # Надсилаємо адміну
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("Відповісти", callback_data=f"reply_{user.id}")]
+        ])
+        await context.bot.send_message(
+            int(ADMIN_ID),
+            f"📩 Нове звернення від {user.first_name} (@{user.username}):\n\n{text}",
+            reply_markup=keyboard
+        )
+
+        await update.message.reply_text("✅ Ваше повідомлення надіслано у підтримку.")
+
+async def reply_to_user_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    user_id = int(query.data.split("_")[1])
+    context.user_data['reply_user'] = user_id
+    await query.answer()
+    await query.message.reply_text("✉️ Введіть відповідь користувачу:")
+
+async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if 'reply_user' in context.user_data:
+        user_id = context.user_data.pop('reply_user')
+        text = update.message.text
+        try:
+            await context.bot.send_message(user_id, f"💬 Відповідь від підтримки:\n\n{text}")
+            await update.message.reply_text("✅ Відповідь надіслана користувачу.")
+        except:
+            await update.message.reply_text("❌ Не вдалося надіслати користувачу.")
+
 # ===== Команди =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -186,6 +224,12 @@ async def movie_by_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.user_data.get('send_all'):
         await handle_send_all(update, context)
         return
+    if context.user_data.get('support'):
+        await handle_support_message(update, context)
+        return
+    if 'reply_user' in context.user_data:
+        await handle_admin_reply(update, context)
+        return
     await show_film(update, context, code)
 
 # ===== Main =====
@@ -197,7 +241,9 @@ def main():
     app.add_handler(CallbackQueryHandler(show_menu, pattern="^menu$"))
     app.add_handler(CallbackQueryHandler(show_stats, pattern="^stats$"))
     app.add_handler(CallbackQueryHandler(send_all_message, pattern="^send_all$"))
-    app.add_handler(CallbackQueryHandler(support, pattern="^support$"))
+    app.add_handler(CallbackQueryHandler(support_callback, pattern="^support$"))
+    app.add_handler(CallbackQueryHandler(reply_to_user_callback, pattern="^reply_"))
+
     print("✅ Бот запущений")
     app.run_polling()
 

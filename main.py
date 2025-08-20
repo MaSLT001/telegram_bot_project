@@ -7,6 +7,7 @@ from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler,
     CallbackQueryHandler, filters, ContextTypes
 )
+from googletrans import Translator
 
 # ===== ENV перемінні =====
 TOKEN = os.getenv("BOT_TOKEN")
@@ -51,6 +52,9 @@ def save_stats():
     except Exception as e:
         print("❌ Помилка при збереженні на GitHub:", e)
 
+# ===== Переклад =====
+translator = Translator()
+
 # ===== Клавіатури =====
 def main_keyboard():
     return InlineKeyboardMarkup([
@@ -70,17 +74,38 @@ def film_keyboard(text):
     ])
 
 # ===== Показ фільму =====
-async def show_film(update: Update, context: ContextTypes.DEFAULT_TYPE, code: str):
-    # Пошук по коду або назві
-    film = movies.get(code)
+async def show_film(update: Update, context: ContextTypes.DEFAULT_TYPE, query_text: str):
+    # Переклад з російської на українську
+    try:
+        translated = translator.translate(query_text, src='ru', dest='uk').text
+    except:
+        translated = query_text
+
+    # Пошук за кодом
+    film = movies.get(translated)
     if not film:
-        # Пошук по назві
-        film = next((f for f in movies.values() if f['title'].lower() == code.lower()), None)
-    if not film:
-        await update.message.reply_text("❌ Фільм не знайдено", reply_markup=main_keyboard())
+        # Пошук по частковій назві (case-insensitive)
+        matches = [(c, f) for c, f in movies.items() if translated.lower() in f['title'].lower()]
+        if not matches:
+            await update.message.reply_text("❌ Фільм не знайдено", reply_markup=main_keyboard())
+            return
+        # Кнопки для вибору
+        keyboard = [[InlineKeyboardButton(f['title'], callback_data=f"show_{c}")] for c, f in matches[:10]]
+        await update.message.reply_text(
+            "🔎 Знайдено кілька збігів. Оберіть фільм:",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
         return
+    # Показ фільму
     text = f"🎬 *{film['title']}*\n\n{film['desc']}\n\n🔗 {film['link']}"
     await update.message.reply_text(text, parse_mode="Markdown", reply_markup=film_keyboard(text))
+
+async def show_film_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if query.data.startswith("show_"):
+        code = query.data.replace("show_", "")
+        await show_film(query, context, code)
+        await query.answer()
 
 async def random_film(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not movies:
@@ -98,7 +123,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_stats[uid] = {"username": user.username, "first_name": user.first_name}
         save_stats()
     await update.message.reply_text(
-        f"Привіт, {user.first_name}!👋 Введи код фільму або натисни кнопку нижче щоб ми тобі запропонували фільм😉",
+        f"Привіт, {user.first_name}!👋 Введи код фільму або назву, або натисни кнопку нижче щоб ми запропонували фільм😉",
         reply_markup=main_keyboard()
     )
 
@@ -116,6 +141,7 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, movie_by_code))
     app.add_handler(CallbackQueryHandler(random_film, pattern="^random_film$"))
+    app.add_handler(CallbackQueryHandler(show_film_callback, pattern="^show_"))
     print("✅ Бот запущений")
     app.run_polling()
 

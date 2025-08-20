@@ -58,7 +58,6 @@ def main_keyboard(is_admin=False):
     ]
     if is_admin:
         buttons.append([
-            InlineKeyboardButton("📋 Меню", callback_data="menu"),
             InlineKeyboardButton("📊 Статистика", callback_data="stats"),
             InlineKeyboardButton("📢 Відправити всім", callback_data="send_all")
         ])
@@ -74,7 +73,6 @@ def film_keyboard(text, is_admin=False):
     ]
     if is_admin:
         buttons.append([
-            InlineKeyboardButton("📋 Меню", callback_data="menu"),
             InlineKeyboardButton("📊 Статистика", callback_data="stats"),
             InlineKeyboardButton("📢 Відправити всім", callback_data="send_all")
         ])
@@ -123,16 +121,6 @@ async def random_film(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await show_film(update, context, code)
     await update.callback_query.answer()
 
-# ===== Меню =====
-async def show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        await update.callback_query.answer("❌ Немає доступу", show_alert=True)
-        return
-    await update.callback_query.edit_message_text(
-        "📋 Головне меню",
-        reply_markup=main_keyboard(True)
-    )
-
 # ===== Статистика =====
 async def show_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
@@ -146,8 +134,24 @@ async def send_all_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         await update.callback_query.answer("❌ Немає доступу", show_alert=True)
         return
+    # Підтвердження перед розсилкою
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✅ Так", callback_data="confirm_send_all"),
+            InlineKeyboardButton("❌ Ні", callback_data="cancel_send_all")
+        ]
+    ])
+    await update.callback_query.edit_message_text("⚠️ Ви впевнені, що хочете надіслати повідомлення всім користувачам?", reply_markup=keyboard)
+
+async def confirm_send_all_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.answer()
     await update.callback_query.edit_message_text("✉️ Введіть повідомлення для всіх користувачів:")
     context.user_data['send_all'] = True
+
+async def cancel_send_all_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.answer("❌ Розсилка скасована")
+    context.user_data['send_all'] = False
+    await update.callback_query.edit_message_text("❌ Розсилка скасована", reply_markup=main_keyboard(True))
 
 async def handle_send_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.user_data.get('send_all'):
@@ -238,9 +242,10 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, movie_by_code))
     app.add_handler(CallbackQueryHandler(random_film, pattern="^random_film$"))
-    app.add_handler(CallbackQueryHandler(show_menu, pattern="^menu$"))
     app.add_handler(CallbackQueryHandler(show_stats, pattern="^stats$"))
     app.add_handler(CallbackQueryHandler(send_all_message, pattern="^send_all$"))
+    app.add_handler(CallbackQueryHandler(confirm_send_all_callback, pattern="^confirm_send_all$"))
+    app.add_handler(CallbackQueryHandler(cancel_send_all_callback, pattern="^cancel_send_all$"))
     app.add_handler(CallbackQueryHandler(support_callback, pattern="^support$"))
     app.add_handler(CallbackQueryHandler(reply_to_user_callback, pattern="^reply_"))
 

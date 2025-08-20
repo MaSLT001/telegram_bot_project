@@ -1,8 +1,7 @@
 import os
 import json
 import random
-import requests
-import base64
+from github import Github
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler,
@@ -11,19 +10,13 @@ from telegram.ext import (
 
 # ===== ENV перемінні =====
 TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = os.getenv("ADMIN_ID")
-GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")  # Для оновлення stats.json на GitHub
-GITHUB_REPO = os.getenv("GITHUB_REPO")    # Формат: username/repo
-GITHUB_FILE_PATH = "stats.json"
+ADMIN_ID = int(os.getenv("ADMIN_ID"))
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
+GITHUB_OWNER = os.getenv("GITHUB_OWNER")
+GITHUB_REPO = os.getenv("GITHUB_REPO")
 
-if not TOKEN:
-    raise ValueError("BOT_TOKEN не встановлено")
-if not ADMIN_ID:
-    raise ValueError("ADMIN_ID не встановлено")
-if not GITHUB_TOKEN or not GITHUB_REPO:
-    raise ValueError("GITHUB_TOKEN або GITHUB_REPO не встановлено")
-
-ADMIN_ID = int(ADMIN_ID)
+if not TOKEN or not ADMIN_ID or not GITHUB_TOKEN or not GITHUB_OWNER or not GITHUB_REPO:
+    raise ValueError("Перевірте, що всі змінні оточення встановлені")
 
 # ===== Фільми =====
 try:
@@ -39,37 +32,24 @@ if os.path.exists(STATS_FILE):
     with open(STATS_FILE, "r", encoding="utf-8") as f:
         user_stats = json.load(f)
 
+# ===== GitHub save =====
 def save_stats():
+    # Локальне збереження
     with open(STATS_FILE, "w", encoding="utf-8") as f:
         json.dump(user_stats, f, indent=2, ensure_ascii=False)
-    github_update_stats()  # Одразу оновлюємо GitHub
-
-def github_update_stats():
-    """Оновлює stats.json на GitHub"""
-    url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_FILE_PATH}"
-    headers = {"Authorization": f"token {GITHUB_TOKEN}"}
-    sha = None
-
-    r = requests.get(url, headers=headers)
-    if r.status_code == 200:
-        sha = r.json()["sha"]
-
-    content = base64.b64encode(json.dumps(user_stats, indent=2, ensure_ascii=False).encode()).decode()
-    data = {"message": "Update stats.json", "content": content}
-    if sha:
-        data["sha"] = sha
-
-    response = requests.put(url, headers=headers, json=data)
-    if response.status_code in [200, 201]:
-        print("✅ stats.json успішно оновлено на GitHub")
-    else:
-        print("❌ Помилка оновлення stats.json:", response.text)
-
-def add_user(uid, username, first_name):
-    uid = str(uid)
-    if uid not in user_stats:
-        user_stats[uid] = {"username": username, "first_name": first_name}
-        save_stats()
+    
+    # GitHub збереження
+    try:
+        g = Github(GITHUB_TOKEN)
+        repo = g.get_user(GITHUB_OWNER).get_repo(GITHUB_REPO)
+        content = json.dumps(user_stats, indent=2, ensure_ascii=False)
+        try:
+            file = repo.get_contents(STATS_FILE)
+            repo.update_file(path=STATS_FILE, message="Update stats.json", content=content, sha=file.sha)
+        except:
+            repo.create_file(path=STATS_FILE, message="Create stats.json", content=content)
+    except Exception as e:
+        print("❌ Помилка при збереженні на GitHub:", e)
 
 # ===== Клавіатури =====
 def main_keyboard():
@@ -90,7 +70,15 @@ def film_keyboard(text):
     ])
 
 # ===== Показ фільму =====
-async def show_film(update: Update, context: ContextTypes.DEFAULT_TYPE, film):
+async def show_film(update: Update, context: ContextTypes.DEFAULT_TYPE, code: str):
+    # Пошук по коду або назві
+    film = movies.get(code)
+    if not film:
+        # Пошук по назві
+        film = next((f for f in movies.values() if f['title'].lower() == code.lower()), None)
+    if not film:
+        await update.message.reply_text("❌ Фільм не знайдено", reply_markup=main_keyboard())
+        return
     text = f"🎬 *{film['title']}*\n\n{film['desc']}\n\n🔗 {film['link']}"
     await update.message.reply_text(text, parse_mode="Markdown", reply_markup=film_keyboard(text))
 
@@ -99,65 +87,35 @@ async def random_film(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.callback_query.answer("❌ Список фільмів порожній.")
         return
     code = random.choice(list(movies.keys()))
-    await show_film(update.callback_query, context, movies[code])
+    await show_film(update.callback_query, context, code)
     await update.callback_query.answer()
 
 # ===== Команди =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    add_user(user.id, user.username, user.first_name)
+    uid = str(user.id)
+    if uid not in user_stats:
+        user_stats[uid] = {"username": user.username, "first_name": user.first_name}
+        save_stats()
     await update.message.reply_text(
-        f"Привіт, {user.first_name}!👋 Введи код фільму або назву, або натисни кнопку нижче щоб отримати фільм😉",
+        f"Привіт, {user.first_name}!👋 Введи код фільму або натисни кнопку нижче щоб ми тобі запропонували фільм😉",
         reply_markup=main_keyboard()
     )
 
-async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        return
-    total = len(user_stats)
-    users_list = "\n".join(
-        [f"{uid} — @{data.get('username', 'нема')} ({data.get('first_name','')})"
-         for uid, data in user_stats.items()]
-    )
-    text = f"📊 Всього користувачів: {total}\n\n{users_list}"
-    await update.message.reply_text(text if len(text) < 4000 else f"📊 Всього користувачів: {total}")
-
-# ===== Пошук фільму =====
-async def movie_by_code_or_title(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.message.text.strip().lower()
-    add_user(update.effective_user.id, update.effective_user.username, update.effective_user.first_name)
-
-    # Спочатку шукаємо за кодом
-    if query in movies:
-        await show_film(update, context, movies[query])
-        return
-
-    # Потім шукаємо за назвою
-    found = None
-    for film in movies.values():
-        if query in film["title"].lower():
-            found = film
-            break
-
-    if found:
-        await show_film(update, context, found)
-    else:
-        await update.message.reply_text("❌ Фільм не знайдено", reply_markup=main_keyboard())
+async def movie_by_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    code = update.message.text.strip()
+    uid = str(update.effective_user.id)
+    if uid not in user_stats:
+        user_stats[uid] = {"username": update.effective_user.username, "first_name": update.effective_user.first_name}
+    save_stats()
+    await show_film(update, context, code)
 
 # ===== Main =====
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
-
-    # Команди
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("stats", stats))
-
-    # Callback
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, movie_by_code))
     app.add_handler(CallbackQueryHandler(random_film, pattern="^random_film$"))
-
-    # Повідомлення
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, movie_by_code_or_title))
-
     print("✅ Бот запущений")
     app.run_polling()
 

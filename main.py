@@ -89,12 +89,10 @@ def find_film_by_text(text):
     except:
         translated = text
 
-    # точний збіг
     for film in movies.values():
         if film['title'].lower() == translated.lower():
             return film
 
-    # неповна назва
     titles = [f['title'] for f in movies.values()]
     matches = get_close_matches(translated, titles, n=1, cutoff=0.5)
     if matches:
@@ -134,35 +132,41 @@ async def send_all_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         await update.callback_query.answer("❌ Немає доступу", show_alert=True)
         return
-    # Підтвердження перед розсилкою
-    keyboard = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("✅ Так", callback_data="confirm_send_all"),
-            InlineKeyboardButton("❌ Ні", callback_data="cancel_send_all")
-        ]
-    ])
-    await update.callback_query.edit_message_text("⚠️ Ви впевнені, що хочете надіслати повідомлення всім користувачам?", reply_markup=keyboard)
-
-async def confirm_send_all_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.callback_query.answer()
     await update.callback_query.edit_message_text("✉️ Введіть повідомлення для всіх користувачів:")
     context.user_data['send_all'] = True
 
-async def cancel_send_all_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.callback_query.answer("❌ Розсилка скасована")
-    context.user_data['send_all'] = False
-    await update.callback_query.edit_message_text("❌ Розсилка скасована", reply_markup=main_keyboard(True))
-
 async def handle_send_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if context.user_data.get('send_all'):
-        text = update.message.text
+    if context.user_data.get('send_all') and 'pending_text' not in context.user_data:
+        context.user_data['pending_text'] = update.message.text
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("✅ Відправити", callback_data="confirm_send_all"),
+                InlineKeyboardButton("❌ Скасувати", callback_data="cancel_send_all")
+            ]
+        ])
+        await update.message.reply_text(
+            f"⚠️ Ви впевнені, що хочете надіслати наступне повідомлення всім користувачам?\n\n{update.message.text}",
+            reply_markup=keyboard
+        )
+        context.user_data['send_all'] = False
+
+async def confirm_send_all_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.answer()
+    text = context.user_data.pop('pending_text', None)
+    if text:
         for uid in user_stats:
             try:
                 await context.bot.send_message(int(uid), text)
             except:
                 pass
-        context.user_data['send_all'] = False
-        await update.message.reply_text("✅ Повідомлення надіслано всім користувачам", reply_markup=main_keyboard(True))
+        await update.callback_query.edit_message_text("✅ Повідомлення надіслано всім користувачам", reply_markup=main_keyboard(True))
+    else:
+        await update.callback_query.edit_message_text("❌ Помилка: немає тексту для відправки", reply_markup=main_keyboard(True))
+
+async def cancel_send_all_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.answer("❌ Розсилка скасована")
+    context.user_data.pop('pending_text', None)
+    await update.callback_query.edit_message_text("❌ Розсилка скасована", reply_markup=main_keyboard(True))
 
 # ===== Підтримка =====
 async def support_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -178,7 +182,6 @@ async def handle_support_message(update: Update, context: ContextTypes.DEFAULT_T
         text = update.message.text
         context.user_data['support'] = False
 
-        # Надсилаємо адміну
         keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton("Відповісти", callback_data=f"reply_{user.id}")]
         ])
@@ -187,7 +190,6 @@ async def handle_support_message(update: Update, context: ContextTypes.DEFAULT_T
             f"📩 Нове звернення від {user.first_name} (@{user.username}):\n\n{text}",
             reply_markup=keyboard
         )
-
         await update.message.reply_text("✅ Ваше повідомлення надіслано у підтримку.")
 
 async def reply_to_user_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -225,7 +227,7 @@ async def movie_by_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if uid not in user_stats:
         user_stats[uid] = {"username": update.effective_user.username, "first_name": update.effective_user.first_name}
     save_stats()
-    if context.user_data.get('send_all'):
+    if context.user_data.get('send_all') or 'pending_text' in context.user_data:
         await handle_send_all(update, context)
         return
     if context.user_data.get('support'):
@@ -244,10 +246,10 @@ def main():
     app.add_handler(CallbackQueryHandler(random_film, pattern="^random_film$"))
     app.add_handler(CallbackQueryHandler(show_stats, pattern="^stats$"))
     app.add_handler(CallbackQueryHandler(send_all_message, pattern="^send_all$"))
-    app.add_handler(CallbackQueryHandler(confirm_send_all_callback, pattern="^confirm_send_all$"))
-    app.add_handler(CallbackQueryHandler(cancel_send_all_callback, pattern="^cancel_send_all$"))
     app.add_handler(CallbackQueryHandler(support_callback, pattern="^support$"))
     app.add_handler(CallbackQueryHandler(reply_to_user_callback, pattern="^reply_"))
+    app.add_handler(CallbackQueryHandler(confirm_send_all_callback, pattern="^confirm_send_all$"))
+    app.add_handler(CallbackQueryHandler(cancel_send_all_callback, pattern="^cancel_send_all$"))
 
     print("✅ Бот запущений")
     app.run_polling()

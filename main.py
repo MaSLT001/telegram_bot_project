@@ -15,7 +15,7 @@ TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID"))
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 GITHUB_OWNER = os.getenv("GITHUB_OWNER")
-GITHUB_REPO = os.getenv("GITHUB_REP")
+GITHUB_REPO = os.getenv("GITHUB_REPO")
 
 if not TOKEN or not ADMIN_ID or not GITHUB_TOKEN or not GITHUB_OWNER or not GITHUB_REPO:
     raise ValueError("Перевірте, що всі змінні оточення встановлені")
@@ -256,4 +256,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 

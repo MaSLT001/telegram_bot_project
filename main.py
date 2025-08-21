@@ -217,7 +217,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_stats[uid] = {"username": user.username, "first_name": user.first_name}
         save_stats()
     await update.message.reply_text(
-        f"Привіт, {user.first_name}!👋 Введи код фільму або натисни кнопку нижче щоб ми тобі запропонували фільм😉",
+        f"Привіт, {user.first_name}!👋 Введи назву фільму або його код, також можеш натиснути кнопку нижче щоб ми тобі запропонували фільм😉",
         reply_markup=main_keyboard(user.id == ADMIN_ID)
     )
 
@@ -256,5 +256,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 

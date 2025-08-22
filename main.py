@@ -1,7 +1,6 @@
 import os
 import json
 import random
-from datetime import time
 from github import Github
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -18,7 +17,6 @@ ADMIN_ID = int(os.getenv("ADMIN_ID"))
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 GITHUB_OWNER = os.getenv("GITHUB_OWNER")
 GITHUB_REPO = os.getenv("GITHUB_REPO")
-PUBLIC_CHAT_ID = os.getenv("PUBLIC_CHAT_ID")  # для публічного повідомлення переможця
 
 if not TOKEN or not ADMIN_ID or not GITHUB_TOKEN or not GITHUB_OWNER or not GITHUB_REPO:
     raise ValueError("Перевірте, що всі змінні оточення встановлені")
@@ -95,11 +93,9 @@ def find_film_by_text(text):
         translated = GoogleTranslator(source='auto', target='uk').translate(text)
     except:
         translated = text
-
     for film in movies.values():
         if film['title'].lower() == translated.lower():
             return film
-
     titles = [f['title'] for f in movies.values()]
     matches = get_close_matches(translated, titles, n=1, cutoff=0.5)
     if matches:
@@ -247,46 +243,55 @@ async def giveaway_participants_callback(update: Update, context: ContextTypes.D
             participants.append(f"– {name} {username} (ID: {uid})")
 
     count = len(participants)
-    text = f"📋 Учасники розіграшу ({count}):\n" + "\n".join(participants) if participants else "⚠️ Немає учасників розіграшу"
-
+    text = f"📋 Учасники розіграшу ({count}):\n" + "\n".join(participants) if participants else "Немає учасників."
     await update.callback_query.edit_message_text(text, reply_markup=main_keyboard(True))
 
+# ===== Повідомлення всім користувачам про новий розіграш =====
+async def notify_users_new_giveaway(context):
+    for uid, data in user_stats.items():
+        if not data.get("giveaway"):
+            try:
+                keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🎁 Взяти участь", callback_data="giveaway")]])
+                await context.bot.send_message(
+                    chat_id=int(uid),
+                    text="🎉 Розіграш місячної максимальної підписки MEGOGO стартував! Натисніть кнопку нижче, щоб взяти участь.",
+                    reply_markup=keyboard
+                )
+            except Exception as e:
+                print(f"Не вдалося надіслати повідомлення користувачу {uid}: {e}")
+
+# ===== Автоматичний розіграш =====
 async def run_giveaway(context: ContextTypes.DEFAULT_TYPE):
     participants = [(uid, data) for uid, data in user_stats.items() if data.get("giveaway")]
 
     if not participants:
         await context.bot.send_message(ADMIN_ID, "⚠️ У цьому місяці не було учасників розіграшу.")
-        return
+    else:
+        winner_id, winner_data = random.choice(participants)
+        name = winner_data.get("first_name", "Користувач")
+        username = f"@{winner_data['username']}" if winner_data.get("username") else ""
+        try:
+            keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("✉️ Написати в підтримку", callback_data="support")]])
+            await context.bot.send_message(
+                chat_id=winner_id,
+                text=f"🏆 Вітаємо, {name}! Ви виграли місячну максимальну підписку MEGOGO 🎉\nЩоб отримати приз, натисніть кнопку нижче та повідомте про перемогу у підтримку.",
+                reply_markup=keyboard
+            )
+        except:
+            await context.bot.send_message(ADMIN_ID, f"⚠️ Не вдалося написати переможцю {name} ({winner_id})")
 
-    winner_id, winner_data = random.choice(participants)
-    name = winner_data.get("first_name", "Користувач")
-    username = f"@{winner_data['username']}" if winner_data.get("username") else ""
-    user_id = winner_id
-
-    # Повідомлення переможцю
-    try:
-        keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("✉️ Написати в підтримку", callback_data="support")]])
         await context.bot.send_message(
-            chat_id=winner_id,
-            text=(
-                f"🏆 Вітаємо, {name}! Ви виграли місячну максимальну підписку MEGOGO 🎉\n\n"
-                "Щоб отримати приз, натисніть кнопку нижче та повідомте про перемогу у підтримку."
-            ),
-            reply_markup=keyboard
+            chat_id=ADMIN_ID,
+            text=f"🎁 Переможець розіграшу:\n\n👤 {name} {username}\n🆔 {winner_id}"
         )
-    except:
-        await context.bot.send_message(ADMIN_ID, f"⚠️ Не вдалося написати переможцю {name} ({user_id})")
 
-    # Повідомлення адміну
-    await context.bot.send_message(
-        chat_id=ADMIN_ID,
-        text=f"🎁 Переможець розіграшу:\n\n👤 {name} {username}\n🆔 {user_id}"
-    )
-
-    # Скидання giveaway
+    # Скидання giveaway і збереження
     for uid in user_stats:
         user_stats[uid]["giveaway"] = False
     save_stats()
+
+    # Повідомлення всім про новий розіграш
+    await notify_users_new_giveaway(context)
 
 # ===== Команди =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -296,7 +301,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_stats[uid] = {"username": user.username, "first_name": user.first_name}
         save_stats()
     await update.message.reply_text(
-        f"Привіт, {user.first_name}!👋 Введи назву фільму або його код, також можеш натиснути кнопку нижче щоб ми тобі запропонували фільм😉",
+        f"Привіт, {user.first_name}!👋 Введи назву фільму або його код, або натисни кнопку нижче 😉",
         reply_markup=main_keyboard(user.id == ADMIN_ID)
     )
 
@@ -305,7 +310,7 @@ async def movie_by_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = str(update.effective_user.id)
     if uid not in user_stats:
         user_stats[uid] = {"username": update.effective_user.username, "first_name": update.effective_user.first_name}
-    save_stats()
+        save_stats()
     if context.user_data.get('send_all') or 'pending_text' in context.user_data:
         await handle_send_all(update, context)
         return

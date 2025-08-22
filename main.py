@@ -62,6 +62,18 @@ def save_stats_to_github():
     except Exception as e:
         print("❌ Помилка GitHub:", e)
 
+# ===== Оновлення статистики =====
+def update_user_stats(user):
+    """Додає користувача у stats.json, якщо його ще немає"""
+    user_id = str(user.id)
+    if user_id not in user_stats:
+        user_stats[user_id] = {
+            "username": user.username or "немає",
+            "first_name": user.first_name or "немає"
+        }
+        with open(STATS_FILE, "w", encoding="utf-8") as f:
+            json.dump(user_stats, f, indent=2, ensure_ascii=False)
+
 # ===== Клавіатури =====
 def main_keyboard(is_admin=False):
     buttons = [
@@ -126,13 +138,16 @@ def find_film_by_text(text):
 
 # ===== Показ фільму =====
 async def show_film(update: Update, context: ContextTypes.DEFAULT_TYPE, code_or_text: str):
+    user = update.effective_user
+    update_user_stats(user)  # додаємо користувача
+
     film = find_film_by_text(code_or_text)
     message = get_message(update)
 
     if not film:
         await message.reply_text(
             "❌ Фільм не знайдено",
-            reply_markup=main_keyboard(update.effective_user.id == ADMIN_ID)
+            reply_markup=main_keyboard(user.id == ADMIN_ID)
         )
         return
 
@@ -147,7 +162,7 @@ async def show_film(update: Update, context: ContextTypes.DEFAULT_TYPE, code_or_
 
     sent = await message.reply_text(
         text,
-        reply_markup=film_keyboard(film['title'], update.effective_user.id == ADMIN_ID)
+        reply_markup=film_keyboard(film['title'], user.id == ADMIN_ID)
     )
     context.user_data["last_film_message"] = sent
 
@@ -162,25 +177,31 @@ async def random_film(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ===== Обробники команд =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
+    update_user_stats(user)  # додаємо користувача
     await update.message.reply_text(
         f"Привіт, {user.first_name}! 👋 Введи назву фільму або натисни кнопку нижче.",
         reply_markup=main_keyboard(user.id == ADMIN_ID)
     )
 
 async def raffle(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    update_user_stats(update.effective_user)  # додаємо користувача
     await get_message(update).reply_text("🎁 Розіграш MEGOGO! Деталі поки відсутні.")
 
 # ===== Показ статистики =====
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    total_users = len(user_stats)
-    total_requests = sum(user_stats.values())
-    message = update.callback_query.message
-    await message.reply_text(
-        f"📊 Статистика бота:\nКористувачів: {total_users}\nЗапитів: {total_requests}"
-    )
+    try:
+        message = update.callback_query.message
+        total_users = len(user_stats)
+        users_list = "\n".join([f"{u['first_name']} (@{u['username']})" for u in user_stats.values()])
+        await message.reply_text(
+            f"📊 Статистика бота:\nКількість користувачів: {total_users}\n\n{users_list}"
+        )
+    except Exception as e:
+        await update.callback_query.message.reply_text(f"❌ Помилка при завантаженні статистики: {e}")
 
 # ===== Підтримка =====
 async def support(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    update_user_stats(update.effective_user)  # додаємо користувача
     await get_message(update).reply_text(
         "Виберіть тему звернення:",
         reply_markup=support_keyboard()
@@ -207,9 +228,12 @@ async def admin_reply_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 # ===== Text handler =====
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    username = update.effective_user.username or "немає"
+    user = update.effective_user
+    update_user_stats(user)  # додаємо користувача
+
+    username = user.username or "немає"
     text = update.message.text
+    user_id = user.id
 
     # Користувач пише звернення
     if context.user_data.get("awaiting_support"):
@@ -259,10 +283,10 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+    user_id = query.from_user.id
+    update_user_stats(query.from_user)  # додаємо користувача
 
     data = query.data
-    user_id = query.from_user.id
-
     if data == "random_film":
         await random_film(update, context)
     elif data == "raffle":

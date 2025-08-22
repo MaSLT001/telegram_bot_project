@@ -112,13 +112,11 @@ def find_film_by_text(text):
     return None
 
 # ===== Показ фільму =====
-last_film_message = None  # Для видалення старих кнопок
+last_film_message = None
 
 async def show_film(update: Update, context: ContextTypes.DEFAULT_TYPE, code: str):
     global last_film_message
-    film = movies.get(code)
-    if not film:
-        film = find_film_by_text(code)
+    film = movies.get(code) or find_film_by_text(code)
     message = get_message(update)
     if not film:
         await message.reply_text("❌ Фільм не знайдено", reply_markup=main_keyboard(update.effective_user.id == ADMIN_ID))
@@ -196,6 +194,7 @@ async def raffle_job(app):
 
 async def schedule_raffle(app):
     scheduler = AsyncIOScheduler()
+    # щомісячно 1 числа о 00:00
     scheduler.add_job(lambda: asyncio.create_task(raffle_job(app)), "cron", day=1, hour=0, minute=0)
     scheduler.start()
 
@@ -241,11 +240,9 @@ async def main_async():
     app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(callback_handler))
-    # Запуск розіграшу
     await schedule_raffle(app)
     await app.run_polling()
 
 if __name__ == "__main__":
     nest_asyncio.apply()
     asyncio.run(main_async())
-

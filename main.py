@@ -10,10 +10,6 @@ from telegram.ext import (
 from deep_translator import GoogleTranslator
 from difflib import get_close_matches
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-import nest_asyncio
-
-# ===== FIX для Render/Jupyter =====
-nest_asyncio.apply()
 
 # ===== ENV змінні =====
 TOKEN = os.getenv("BOT_TOKEN")
@@ -306,4 +302,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 

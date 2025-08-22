@@ -38,6 +38,14 @@ if os.path.exists(STATS_FILE):
 else:
     user_stats = {}
 
+# ===== Підтримка =====
+SUPPORT_FILE = "support.json"
+if os.path.exists(SUPPORT_FILE):
+    with open(SUPPORT_FILE, "r", encoding="utf-8") as f:
+        support_requests = json.load(f)
+else:
+    support_requests = {}
+
 # ===== GitHub save =====
 def save_stats_to_github():
     with open(STATS_FILE, "w", encoding="utf-8") as f:
@@ -90,27 +98,21 @@ def get_message(update: Update):
 
 # ===== Пошук фільму =====
 def find_film_by_text(text):
-    """Шукає фільм за кодом або назвою (з перекладом)."""
-    # Спершу шукаємо по коду
     if text in movies:
         return movies[text]
 
-    # Переклад для назви
     try:
         translated = GoogleTranslator(source='auto', target='uk').translate(text)
     except:
         translated = text
 
     translated_lower = translated.lower()
-    # Точна назва
     for film in movies.values():
         if film['title'].lower() == translated_lower:
             return film
-    # Часткова назва
     for film in movies.values():
         if translated_lower in film['title'].lower():
             return film
-    # Найближчий збіг
     titles = [f['title'] for f in movies.values()]
     matches = get_close_matches(translated, titles, n=1, cutoff=0.5)
     if matches:
@@ -160,15 +162,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=main_keyboard(user.id == ADMIN_ID)
     )
 
-async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await show_film(update, context, update.message.text)
-
-async def support(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await get_message(update).reply_text(
-        "Виберіть тип звернення:",
-        reply_markup=support_keyboard()
-    )
-
 async def raffle(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await get_message(update).reply_text("🎁 Розіграш MEGOGO! Деталі поки відсутні.")
 
@@ -178,6 +171,58 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await get_message(update).reply_text(
         f"📊 Статистика бота:\nКористувачів: {total_users}\nЗапитів: {total_requests}"
     )
+
+# ===== Підтримка з темами =====
+async def support(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await get_message(update).reply_text(
+        "Виберіть тему звернення:",
+        reply_markup=support_keyboard()
+    )
+
+async def support_topic_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    context.user_data["support_topic"] = query.data
+    context.user_data["awaiting_support"] = True
+    await query.message.reply_text("✉️ Введіть ваше повідомлення для підтримки:")
+
+async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    username = update.effective_user.username or "немає"
+    text = update.message.text
+
+    # Якщо користувач пише звернення
+    if context.user_data.get("awaiting_support"):
+        topic = context.user_data.get("support_topic", "support")
+        # Зберігаємо у файл
+        support_requests.setdefault(str(user_id), []).append({
+            "topic": topic,
+            "message": text
+        })
+        with open(SUPPORT_FILE, "w", encoding="utf-8") as f:
+            json.dump(support_requests, f, indent=2, ensure_ascii=False)
+
+        # Повідомлення користувачу
+        await update.message.reply_text(
+            "✅ Ваше повідомлення відправлено в підтримку!"
+        )
+
+        # Повідомлення адміністратору
+        await context.bot.send_message(
+            chat_id=ADMIN_ID,
+            text=f"✉️ Нове повідомлення у підтримку\n\n"
+                 f"👤 Від: @{username}\n"
+                 f"🆔 ID: {user_id}\n"
+                 f"📂 Розділ: {topic}\n\n"
+                 f"📨 Текст:\n{text}"
+        )
+
+        context.user_data["awaiting_support"] = False
+        context.user_data["support_topic"] = None
+        return
+
+    # Якщо це не звернення – обробляємо як пошук фільму
+    await show_film(update, context, text)
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -189,6 +234,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await raffle(update, context)
     elif query.data == "support":
         await support(update, context)
+    elif query.data.startswith("support_"):
+        await support_topic_handler(update, context)
     elif query.data == "stats" and update.effective_user.id == ADMIN_ID:
         await stats(update, context)
 

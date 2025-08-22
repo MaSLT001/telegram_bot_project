@@ -10,6 +10,7 @@ from telegram.ext import (
 from deep_translator import GoogleTranslator
 from difflib import get_close_matches
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+import asyncio
 
 # ===== ENV змінні =====
 TOKEN = os.getenv("BOT_TOKEN")
@@ -218,24 +219,20 @@ async def run_giveaway(bot):
     winner_id = random.choice(participants)
     winner_data = user_stats[winner_id]
 
-    # Повідомлення переможцю
     try:
         await bot.send_message(int(winner_id), f"🎉 Вітаємо {winner_data['first_name']}! Ви виграли місячну максимальну підписку на Megogo! Напишіть в підтримку для отримання призу.")
     except:
         pass
 
-    # Повідомлення адміну
     try:
         await bot.send_message(ADMIN_ID, f"🎉 Користувач {winner_data['first_name']} (@{winner_data.get('username','')}) виграв розіграш!")
     except:
         pass
 
-    # Скидаємо участь для нового місяця
     for uid in user_stats:
         user_stats[uid][GIVEAWAY_KEY] = False
     save_stats()
 
-    # Повідомлення всім, хто ще не приєднався до нового розіграшу
     for uid, data in user_stats.items():
         if not data.get(GIVEAWAY_KEY):
             try:
@@ -254,18 +251,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if uid not in user_stats:
         user_stats[uid] = {"username": user.username, "first_name": user.first_name, GIVEAWAY_KEY: False}
         save_stats()
-
-    keyboard = main_keyboard(user.id == ADMIN_ID)
-    if not user_stats[uid].get(GIVEAWAY_KEY):
-        giveaway_button = InlineKeyboardMarkup([[InlineKeyboardButton("🎁 Взяти участь у розіграші", callback_data="giveaway")]])
-        await update.message.reply_text(
-            f"Привіт, {user.first_name}! 👋 Введи назву фільму або його код, або натисни кнопку нижче 😉",
-            reply_markup=giveaway_button
-        )
-
     await update.message.reply_text(
-        f"Привіт, {user.first_name}! 👋 Введи назву фільму або його код, або натисни кнопку нижче 😉",
-        reply_markup=keyboard
+        f"Привіт, {user.first_name}!👋 Введи назву фільму або його код, також можеш натиснути кнопку нижче щоб ми тобі запропонували фільм😉",
+        reply_markup=main_keyboard(user.id == ADMIN_ID)
     )
 
 async def movie_by_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -277,7 +265,7 @@ async def movie_by_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await show_film(update, context, code)
 
 # ===== Main =====
-def main():
+async def main_async():
     app = ApplicationBuilder().token(TOKEN).build()
 
     # Команди та хендлери
@@ -298,9 +286,7 @@ def main():
     scheduler.start()
 
     print("✅ Бот запущений")
-    app.run_polling()  # запускає event loop самостійно
+    await app.run_polling()  # запускає event loop
 
 if __name__ == "__main__":
-    main()
-
-
+    asyncio.run(main_async())

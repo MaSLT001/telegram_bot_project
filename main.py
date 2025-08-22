@@ -213,7 +213,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_stats[uid] = {"username": update.effective_user.username, "first_name": update.effective_user.first_name}
         save_stats()
     await update.message.reply_text(
-        "Вітаю! Оберіть дію:", reply_markup=main_keyboard(update.effective_user.id==ADMIN_ID)
+        f"Привіт, {user.first_name}!👋 Введи назву фільму або його код, також можеш натиснути кнопку нижче щоб ми тобі запропонували фільм😉",
+        reply_markup=main_keyboard(user.id == ADMIN_ID)
     )
 
 # ===== Обробники =====
@@ -251,3 +252,4 @@ async def main_async():
 if __name__ == "__main__":
     nest_asyncio.apply()
     asyncio.run(main_async())
+

@@ -6,12 +6,11 @@ from github import Github
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, CallbackQueryHandler,
-    MessageHandler, ConversationHandler, filters, ContextTypes
+    MessageHandler, filters, ContextTypes
 )
 from deep_translator import GoogleTranslator
 from difflib import get_close_matches
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from telegram.helpers import escape_markdown
 
 # ===== ENV змінні =====
 TOKEN = os.getenv("BOT_TOKEN")
@@ -91,13 +90,27 @@ def get_message(update: Update):
 
 # ===== Пошук фільму =====
 def find_film_by_text(text):
+    """Шукає фільм за кодом або назвою (з перекладом)."""
+    # Спершу шукаємо по коду
+    if text in movies:
+        return movies[text]
+
+    # Переклад для назви
     try:
         translated = GoogleTranslator(source='auto', target='uk').translate(text)
     except:
         translated = text
+
+    translated_lower = translated.lower()
+    # Точна назва
     for film in movies.values():
-        if film['title'].lower() == translated.lower():
+        if film['title'].lower() == translated_lower:
             return film
+    # Часткова назва
+    for film in movies.values():
+        if translated_lower in film['title'].lower():
+            return film
+    # Найближчий збіг
     titles = [f['title'] for f in movies.values()]
     matches = get_close_matches(translated, titles, n=1, cutoff=0.5)
     if matches:
@@ -105,176 +118,90 @@ def find_film_by_text(text):
     return None
 
 # ===== Показ фільму =====
-async def show_film(update: Update, context: ContextTypes.DEFAULT_TYPE, code: str):
-    film = movies.get(code) or find_film_by_text(code)
+async def show_film(update: Update, context: ContextTypes.DEFAULT_TYPE, code_or_text: str):
+    film = find_film_by_text(code_or_text)
     message = get_message(update)
+
     if not film:
-        await message.reply_text("❌ Фільм не знайдено", reply_markup=main_keyboard(update.effective_user.id == ADMIN_ID))
+        await message.reply_text(
+            "❌ Фільм не знайдено",
+            reply_markup=main_keyboard(update.effective_user.id == ADMIN_ID)
+        )
         return
+
     last_msg = context.user_data.get("last_film_message")
-    text = f"🎬 *{escape_markdown(film['title'], version=2)}*\n\n{escape_markdown(film['desc'], version=2)}\n\n🔗 {film['link']}"
+    text = f"🎬 {film['title']}\n\n{film['desc']}\n\n🔗 {film['link']}"
+
     if last_msg:
         try:
             await last_msg.edit_reply_markup(reply_markup=None)
         except:
             pass
-    sent = await message.reply_text(text, parse_mode="MarkdownV2", reply_markup=film_keyboard(text, update.effective_user.id == ADMIN_ID))
+
+    sent = await message.reply_text(
+        text,
+        reply_markup=film_keyboard(film['title'], update.effective_user.id == ADMIN_ID)
+    )
     context.user_data["last_film_message"] = sent
 
 # ===== Рандомний фільм =====
 async def random_film(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not movies:
-        if update.callback_query:
-            await update.callback_query.answer("❌ Список фільмів порожній.")
-        else:
-            await update.message.reply_text("❌ Список фільмів порожній.")
+        await get_message(update).reply_text("❌ Список фільмів порожній.")
         return
     code = random.choice(list(movies.keys()))
     await show_film(update, context, code)
-    if update.callback_query:
-        await update.callback_query.answer()
 
-# ===== Статистика =====
-async def show_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        await update.callback_query.answer("❌ Немає доступу", show_alert=True)
-        return
+# ===== Обробники =====
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    await update.message.reply_text(
+        f"Привіт, {user.first_name}! 👋 Введи назву фільму або натисни кнопку нижче.",
+        reply_markup=main_keyboard(user.id == ADMIN_ID)
+    )
+
+async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await show_film(update, context, update.message.text)
+
+async def support(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await get_message(update).reply_text(
+        "Виберіть тип звернення:",
+        reply_markup=support_keyboard()
+    )
+
+async def raffle(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await get_message(update).reply_text("🎁 Розіграш MEGOGO! Деталі поки відсутні.")
+
+async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     total_users = len(user_stats)
-    await update.callback_query.edit_message_text(f"📊 Користувачів: {total_users}", reply_markup=main_keyboard(True))
-
-# ===== Розіграш =====
-async def raffle_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    message = get_message(update)
-    await message.reply_text(
-        "🎁 Розіграш місячної підписки MEGOGO!\n\nНатисніть кнопку нижче щоб взяти участь.",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Взяти участь", callback_data="raffle_join")]])
+    total_requests = sum(user_stats.values())
+    await get_message(update).reply_text(
+        f"📊 Статистика бота:\nКористувачів: {total_users}\nЗапитів: {total_requests}"
     )
 
-async def raffle_join(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = str(update.effective_user.id)
-    if uid not in user_stats:
-        user_stats[uid] = {"username": update.effective_user.username, "first_name": update.effective_user.first_name}
-    user_stats[uid]["raffle"] = True
-    save_stats_to_github()
-    await update.callback_query.answer("✅ Ви стали учасником розіграшу!")
-    await update.callback_query.edit_message_text("✅ Ви стали учасником розіграшу!")
-
-# ===== Підтримка =====
-CHOOSING_SECTION, TYPING_MESSAGE, WAITING_ADMIN_REPLY = range(3)
-pending_replies = {}
-
-async def support_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.callback_query.answer()
-    await update.callback_query.message.reply_text("Оберіть розділ підтримки:", reply_markup=support_keyboard())
-    return CHOOSING_SECTION
-
-async def choose_section(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    section = query.data.split("_")[1]
-    context.user_data["support_section"] = section
-    await query.message.reply_text("✍️ Напишіть своє повідомлення для підтримки:")
-    return TYPING_MESSAGE
-
-async def user_support_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
-    section = context.user_data.get("support_section", "невідомо")
-    section_names = {"zvernennya": "📩 Звернення", "spivpratsya": "🤝 Співпраця", "peremoga": "🏆 Повідомити про перемогу"}
-    section_text = section_names.get(section, "Невідомий розділ")
-    keyboard = [[
-        InlineKeyboardButton("Відповісти", callback_data=f"reply_{update.effective_user.id}"),
-        InlineKeyboardButton("❌ Закрити діалог", callback_data=f"close_{update.effective_user.id}")
-    ]]
-    await context.bot.send_message(
-        chat_id=ADMIN_ID,
-        text=(
-            f"✉️ Нове повідомлення у підтримку\n\n"
-            f"👤 Від: {update.effective_user.full_name} (@{update.effective_user.username})\n"
-            f"🆔 ID: {update.effective_user.id}\n"
-            f"📂 Розділ: {section_text}\n\n"
-            f"📨 Текст: {text}"
-        ),
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
-    await update.message.reply_text("✅ Ваше повідомлення передано в підтримку. Очікуйте відповіді.")
-    context.user_data.pop("support_section", None)
-    return ConversationHandler.END
-
-async def admin_reply_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    user_id = int(query.data.split("_")[1])
-    pending_replies[ADMIN_ID] = user_id
-    await query.message.reply_text("✍️ Введіть повідомлення для користувача:")
-    return WAITING_ADMIN_REPLY
 
-async def admin_close_dialog(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer("✅ Діалог закрито")
-    user_id = int(query.data.split("_")[1])
-    if ADMIN_ID in pending_replies and pending_replies[ADMIN_ID] == user_id:
-        del pending_replies[ADMIN_ID]
-    await query.message.reply_text("❌ Діалог із цим користувачем закрито.")
-
-async def admin_reply_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id == ADMIN_ID:
-        user_id = pending_replies.pop(ADMIN_ID, None)
-        if user_id:
-            await context.bot.send_message(chat_id=user_id, text=f"📩 Відповідь від підтримки:\n\n{update.message.text}")
-            await update.message.reply_text("✅ Відповідь надіслана користувачу.")
-    return ConversationHandler.END
-
-# ===== Start =====
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = str(update.effective_user.id)
-    if uid not in user_stats:
-        user_stats[uid] = {"username": update.effective_user.username, "first_name": update.effective_user.first_name}
-        save_stats_to_github()
-    first_name = update.effective_user.first_name or "друже"
-    welcome_text = f"Привіт, {first_name}!👋\nВведи назву фільму або його код, також можеш натиснути кнопку нижче щоб ми тобі запропонували фільм😉"
-    await update.message.reply_text(welcome_text, reply_markup=main_keyboard(update.effective_user.id == ADMIN_ID))
-
-# ===== Callback Handler =====
-async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    data = update.callback_query.data
-    if data == "random_film":
+    if query.data == "random_film":
         await random_film(update, context)
-    elif data == "raffle":
-        await raffle_start(update, context)
-    elif data == "raffle_join":
-        await raffle_join(update, context)
-    elif data == "support":
-        await support_callback(update, context)
-    elif data.startswith("support_"):
-        await choose_section(update, context)
-    elif data.startswith("reply_"):
-        await admin_reply_button(update, context)
-    elif data.startswith("close_"):
-        await admin_close_dialog(update, context)
-    elif data == "stats":
-        await show_stats(update, context)
-    else:
-        await update.callback_query.answer()
-
-# ===== Текстовий handler =====
-async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
-    if not text:
-        return
-    if update.effective_user.id == ADMIN_ID and ADMIN_ID in pending_replies:
-        await admin_reply_message(update, context)
-        return
-    if context.user_data.get("support_section"):
-        await user_support_message(update, context)
-        return
-    await show_film(update, context, text)
+    elif query.data == "raffle":
+        await raffle(update, context)
+    elif query.data == "support":
+        await support(update, context)
+    elif query.data == "stats" and update.effective_user.id == ADMIN_ID:
+        await stats(update, context)
 
 # ===== MAIN =====
 async def main_async():
     app = ApplicationBuilder().token(TOKEN).build()
     await app.bot.delete_webhook(drop_pending_updates=True)
 
+    # Command
     app.add_handler(CommandHandler("start", start))
+    # Callbacks
     app.add_handler(CallbackQueryHandler(callback_handler))
+    # Text
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
 
     scheduler = AsyncIOScheduler()

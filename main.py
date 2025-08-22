@@ -174,7 +174,7 @@ async def show_raffle_participants(update: Update, context: ContextTypes.DEFAULT
         text = "❌ Немає учасників розіграшу"
     else:
         text = "🎁 Учасники розіграшу:\n\n" + "\n".join(
-            [f"{user_stats[u]['first_name']} (@{user_stats[u].get('username',''))})" for u in participants]
+            [f"{user_stats[u]['first_name']} (@{user_stats[u].get('username','')})" for u in participants]
         )
     await update.callback_query.edit_message_text(text, reply_markup=main_keyboard(True))
 
@@ -248,3 +248,4 @@ async def main_async():
 if __name__ == "__main__":
     nest_asyncio.apply()
     asyncio.run(main_async())
+

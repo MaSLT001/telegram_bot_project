@@ -2,12 +2,11 @@ import os
 import json
 import random
 import asyncio
-from datetime import datetime
 from github import Github
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, CallbackQueryHandler,
-    ContextTypes
+    MessageHandler, filters, ContextTypes
 )
 from deep_translator import GoogleTranslator
 from difflib import get_close_matches
@@ -100,12 +99,15 @@ def get_message(update: Update):
 # ===== Пошук фільму =====
 def find_film_by_text(text):
     try:
+        # Переклад на українську
         translated = GoogleTranslator(source='auto', target='uk').translate(text)
     except:
         translated = text
+    # Спочатку шукаємо точну відповідність по назві
     for film in movies.values():
         if film['title'].lower() == translated.lower():
             return film
+    # Далі шукаємо найближчу схожу назву
     titles = [f['title'] for f in movies.values()]
     matches = get_close_matches(translated, titles, n=1, cutoff=0.5)
     if matches:
@@ -245,11 +247,19 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.callback_query.answer()
 
+# ===== Текстовий handler для пошуку фільмів =====
+async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
+    if not text:
+        return
+    await show_film(update, context, text)
+
 # ===== MAIN =====
 async def main_async():
     app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(callback_handler))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))  # Додаємо пошук за текстом
 
     await schedule_raffle(app)
 

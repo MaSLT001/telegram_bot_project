@@ -1,7 +1,6 @@
 import os
 import json
 import random
-import asyncio
 from github import Github
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -11,6 +10,10 @@ from telegram.ext import (
 from deep_translator import GoogleTranslator
 from difflib import get_close_matches
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+import nest_asyncio
+
+# ===== FIX для Render/Jupyter =====
+nest_asyncio.apply()
 
 # ===== ENV змінні =====
 TOKEN = os.getenv("BOT_TOKEN")
@@ -105,9 +108,7 @@ def find_film_by_text(text):
 
 # ===== Показ фільму =====
 async def show_film(update: Update, context: ContextTypes.DEFAULT_TYPE, code: str):
-    film = movies.get(code)
-    if not film:
-        film = find_film_by_text(code)
+    film = movies.get(code) or find_film_by_text(code)
     message = get_message(update)
     if not film:
         await message.reply_text("❌ Фільм не знайдено", reply_markup=main_keyboard(update.effective_user.id == ADMIN_ID))
@@ -126,11 +127,7 @@ async def show_film(update: Update, context: ContextTypes.DEFAULT_TYPE, code: st
             pass
 
     text = f"🎬 *{film['title']}*\n\n{film['desc']}\n\n🔗 {film['link']}"
-    sent_message = await message.reply_text(
-        text, parse_mode="Markdown", reply_markup=film_keyboard(text, update.effective_user.id == ADMIN_ID)
-    )
-
-    # Зберігаємо ID останнього повідомлення
+    sent_message = await message.reply_text(text, parse_mode="Markdown", reply_markup=film_keyboard(text, update.effective_user.id == ADMIN_ID))
     context.user_data['last_film_message'] = sent_message.message_id
 
 async def random_film(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -149,7 +146,7 @@ async def show_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     total_users = len(user_stats)
     await update.callback_query.edit_message_text(f"📊 Користувачів: {total_users}", reply_markup=main_keyboard(True))
 
-# ===== Відправка всім =====
+# ===== Розсилка всім =====
 async def send_all_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         await update.callback_query.answer("❌ Немає доступу", show_alert=True)
@@ -166,10 +163,7 @@ async def handle_send_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 InlineKeyboardButton("❌ Скасувати", callback_data="cancel_send_all")
             ]
         ])
-        await update.message.reply_text(
-            f"⚠️ Ви впевнені, що хочете надіслати наступне повідомлення всім користувачам?\n\n{update.message.text}",
-            reply_markup=keyboard
-        )
+        await update.message.reply_text(f"⚠️ Ви впевнені, що хочете надіслати наступне повідомлення всім користувачам?\n\n{update.message.text}", reply_markup=keyboard)
         context.user_data['send_all'] = False
 
 async def confirm_send_all_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -198,130 +192,84 @@ async def support_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("2️⃣ Співпраця", callback_data="support_collab")],
         [InlineKeyboardButton("3️⃣ Повідомити про перемогу в розіграші", callback_data="support_giveaway")],
     ])
-    await update.callback_query.message.reply_text(
-        "✉️ Виберіть варіант звернення:",
-        reply_markup=keyboard
-    )
-
-async def handle_support_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    user = update.effective_user
-    data = query.data
-    context.user_data['support_type'] = data
-    await query.answer()
-
-    if data == "support_request":
-        await query.message.reply_text("✉️ Напишіть ваше звернення, і ми його передамо підтримці.")
-    elif data == "support_collab":
-        await query.message.reply_text("🤝 Напишіть повідомлення про співпрацю, і ми передамо його команді.")
-    elif data == "support_giveaway":
-        await query.message.reply_text(
-            f"🎉 Надішліть повідомлення для підтвердження виграшу, вказавши ваш ID користувача: {user.id}"
-        )
-
-async def handle_support_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if 'support_type' not in context.user_data:
-        return
-
-    text = update.message.text
-    user = update.effective_user
-    support_type = context.user_data.pop('support_type')
-
-    if support_type in ["support_request", "support_collab", "support_giveaway"]:
-        keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("Відповісти", callback_data=f"reply_{user.id}")]])
-        await context.bot.send_message(
-            int(ADMIN_ID),
-            f"📩 Нове звернення від {user.first_name} (@{user.username}):\n\n{text}",
-            reply_markup=keyboard
-        )
-        await update.message.reply_text("✅ Ваше повідомлення надіслано підтримці.")
+    await update.callback_query.message.reply_text("✉️ Виберіть варіант звернення:", reply_markup=keyboard)
 
 # ===== Розіграш =====
+GIVEAWAY_KEY = "giveaway"
+
 async def join_giveaway_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.callback_query.answer("✅ Ви додані до списку учасників!")
     uid = str(update.effective_user.id)
     if uid not in user_stats:
-        user_stats[uid] = {
-            "username": update.effective_user.username,
-            "first_name": update.effective_user.first_name
-        }
-    user_stats[uid]["giveaway"] = True
+        user_stats[uid] = {"username": update.effective_user.username, "first_name": update.effective_user.first_name}
+    user_stats[uid][GIVEAWAY_KEY] = True
     save_stats()
-    await update.callback_query.message.reply_text("Ви успішно зареєстровані в розіграші 🎁")
+    await update.callback_query.answer("🎁 Ви приєдналися до розіграшу!", show_alert=True)
+    await update.callback_query.edit_message_text("✅ Ви успішно взяли участь у розіграші!")
 
 async def giveaway_participants_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         await update.callback_query.answer("❌ Немає доступу", show_alert=True)
         return
-
-    participants = []
-    for uid, data in user_stats.items():
-        if data.get("giveaway"):
-            name = data.get("first_name", "Користувач")
-            username = f"@{data['username']}" if data.get("username") else ""
-            participants.append(f"– {name} {username} (ID: {uid})")
-
-    count = len(participants)
-    text = f"📋 Учасники розіграшу ({count}):\n" + ("\n".join(participants) if participants else "Немає учасників.")
+    participants = [u for u, v in user_stats.items() if v.get(GIVEAWAY_KEY)]
+    text = "🎁 Учасники розіграшу:\n\n" + "\n".join([f"{user_stats[u]['first_name']} (@{user_stats[u].get('username',''))}" for u in participants])
     await update.callback_query.edit_message_text(text, reply_markup=main_keyboard(True))
 
-# ===== Повідомлення всім користувачам про новий розіграш =====
-async def notify_users_new_giveaway(context):
-    for uid, data in user_stats.items():
-        if not data.get("giveaway"):
-            try:
-                keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🎁 Взяти участь", callback_data="giveaway")]])
-                await context.bot.send_message(
-                    chat_id=int(uid),
-                    text="🎉 Розіграш місячної максимальної підписки MEGOGO стартував! Натисніть кнопку нижче, щоб взяти участь.",
-                    reply_markup=keyboard
-                )
-            except Exception as e:
-                print(f"Не вдалося надіслати повідомлення користувачу {uid}: {e}")
-
-# ===== Автоматичний розіграш =====
-async def run_giveaway(context):
-    participants = [(uid, data) for uid, data in user_stats.items() if data.get("giveaway")]
-
+async def run_giveaway(bot):
+    participants = [uid for uid, data in user_stats.items() if data.get(GIVEAWAY_KEY)]
     if not participants:
-        await context.bot.send_message(ADMIN_ID, "⚠️ У цьому місяці не було учасників розіграшу.")
-    else:
-        winner_id, winner_data = random.choice(participants)
-        name = winner_data.get("first_name", "Користувач")
-        username = f"@{winner_data['username']}" if winner_data.get("username") else ""
-        try:
-            keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("✉️ Написати в підтримку", callback_data="support")]])
-            await context.bot.send_message(
-                chat_id=winner_id,
-                text=f"🏆 Вітаємо, {name}! Ви виграли місячну максимальну підписку MEGOGO 🎉\nЩоб отримати приз, натисніть кнопку нижче та повідомте про перемогу у підтримку.",
-                reply_markup=keyboard
-            )
-        except:
-            await context.bot.send_message(ADMIN_ID, f"⚠️ Не вдалося написати переможцю {name} ({winner_id})")
+        print("❌ Немає учасників розіграшу")
+        return
+    winner_id = random.choice(participants)
+    winner_data = user_stats[winner_id]
 
-        await context.bot.send_message(
-            chat_id=ADMIN_ID,
-            text=f"🎁 Переможець розіграшу:\n\n👤 {name} {username}\n🆔 {winner_id}"
-        )
+    # Повідомлення переможцю
+    try:
+        await bot.send_message(int(winner_id), f"🎉 Вітаємо {winner_data['first_name']}! Ви виграли місячну максимальну підписку на Megogo! Напишіть в підтримку для отримання призу.")
+    except:
+        pass
 
-    # Скидання giveaway і збереження
+    # Повідомлення адміну
+    try:
+        await bot.send_message(ADMIN_ID, f"🎉 Користувач {winner_data['first_name']} (@{winner_data.get('username','')}) виграв розіграш!")
+    except:
+        pass
+
+    # Скидаємо участь для нового місяця
     for uid in user_stats:
-        user_stats[uid]["giveaway"] = False
+        user_stats[uid][GIVEAWAY_KEY] = False
     save_stats()
 
-    # Повідомлення всім про новий розіграш
-    await notify_users_new_giveaway(context)
+    # Повідомлення всім, хто ще не приєднався до нового розіграшу
+    for uid, data in user_stats.items():
+        if not data.get(GIVEAWAY_KEY):
+            try:
+                keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🎁 Взяти участь", callback_data="giveaway")]])
+                await bot.send_message(int(uid), "🎁 Новий розіграш почався! Натисніть кнопку, щоб взяти участь.", reply_markup=keyboard)
+            except:
+                pass
+
+async def giveaway_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await join_giveaway_callback(update, context)
 
 # ===== Команди =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     uid = str(user.id)
     if uid not in user_stats:
-        user_stats[uid] = {"username": user.username, "first_name": user.first_name}
+        user_stats[uid] = {"username": user.username, "first_name": user.first_name, GIVEAWAY_KEY: False}
         save_stats()
+
+    keyboard = main_keyboard(user.id == ADMIN_ID)
+    if not user_stats[uid].get(GIVEAWAY_KEY):
+        giveaway_button = InlineKeyboardMarkup([[InlineKeyboardButton("🎁 Взяти участь у розіграші", callback_data="giveaway")]])
+        await update.message.reply_text(
+            f"Привіт, {user.first_name}! 👋 Введи назву фільму або його код, або натисни кнопку нижче 😉",
+            reply_markup=giveaway_button
+        )
+
     await update.message.reply_text(
-        f"Привіт, {user.first_name}!👋 Введи назву фільму або його код, або натисни кнопку нижче 😉",
-        reply_markup=main_keyboard(user.id == ADMIN_ID)
+        f"Привіт, {user.first_name}! 👋 Введи назву фільму або його код, або натисни кнопку нижче 😉",
+        reply_markup=keyboard
     )
 
 async def movie_by_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -329,43 +277,32 @@ async def movie_by_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = str(update.effective_user.id)
     if uid not in user_stats:
         user_stats[uid] = {"username": update.effective_user.username, "first_name": update.effective_user.first_name}
-        save_stats()
-    if context.user_data.get('send_all') or 'pending_text' in context.user_data:
-        await handle_send_all(update, context)
-        return
-    if 'support_type' in context.user_data:
-        await handle_support_message(update, context)
-        return
+    save_stats()
     await show_film(update, context, code)
 
-# ===== Асинхронний запуск бота =====
-async def main_async():
+# ===== Main =====
+def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
-    # Хендлери
+    # Команди та хендлери
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, movie_by_code))
-
     app.add_handler(CallbackQueryHandler(random_film, pattern="^random_film$"))
     app.add_handler(CallbackQueryHandler(show_stats, pattern="^stats$"))
     app.add_handler(CallbackQueryHandler(send_all_message, pattern="^send_all$"))
     app.add_handler(CallbackQueryHandler(confirm_send_all_callback, pattern="^confirm_send_all$"))
     app.add_handler(CallbackQueryHandler(cancel_send_all_callback, pattern="^cancel_send_all$"))
-
     app.add_handler(CallbackQueryHandler(support_callback, pattern="^support$"))
-    app.add_handler(CallbackQueryHandler(handle_support_choice, pattern="^support_"))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_support_message))
-
-    app.add_handler(CallbackQueryHandler(join_giveaway_callback, pattern="^giveaway$"))
+    app.add_handler(CallbackQueryHandler(giveaway_callback, pattern="^giveaway$"))
     app.add_handler(CallbackQueryHandler(giveaway_participants_callback, pattern="^giveaway_participants$"))
 
-    # Планувальник щомісяця 1-го числа о 12:00
+    # Планувальник для щомісячного розіграшу
     scheduler = AsyncIOScheduler()
     scheduler.add_job(run_giveaway, "cron", day=1, hour=12, minute=0, args=[app.bot])
     scheduler.start()
 
     print("✅ Бот запущений")
-    await app.run_polling()
+    app.run_polling()  # запускає event loop самостійно
 
 if __name__ == "__main__":
-    asyncio.run(main_async())
+    main()

@@ -92,6 +92,11 @@ def support_keyboard():
         [InlineKeyboardButton("🏆 Повідомити про перемогу", callback_data="support_peremoga")]
     ])
 
+def admin_reply_keyboard(user_id):
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("💬 Відповісти", callback_data=f"reply_{user_id}")]
+    ])
+
 # ===== Допоміжна =====
 def get_message(update: Update):
     return update.message or update.callback_query.message
@@ -154,7 +159,7 @@ async def random_film(update: Update, context: ContextTypes.DEFAULT_TYPE):
     code = random.choice(list(movies.keys()))
     await show_film(update, context, code)
 
-# ===== Обробники =====
+# ===== Обробники команд =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     await update.message.reply_text(
@@ -172,7 +177,7 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📊 Статистика бота:\nКористувачів: {total_users}\nЗапитів: {total_requests}"
     )
 
-# ===== Підтримка з темами =====
+# ===== Підтримка =====
 async def support(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await get_message(update).reply_text(
         "Виберіть тему звернення:",
@@ -186,15 +191,27 @@ async def support_topic_handler(update: Update, context: ContextTypes.DEFAULT_TY
     context.user_data["awaiting_support"] = True
     await query.message.reply_text("✉️ Введіть ваше повідомлення для підтримки:")
 
+# ===== Callback для відповіді адміна =====
+async def admin_reply_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if update.effective_user.id != ADMIN_ID:
+        await query.message.reply_text("❌ Тільки адміністратор може відповідати.")
+        return
+
+    user_id = int(query.data.split("_")[1])
+    context.user_data["awaiting_admin_reply"] = user_id
+    await query.message.reply_text(f"✏️ Введіть відповідь для користувача ID: {user_id}")
+
+# ===== Text handler =====
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     username = update.effective_user.username or "немає"
     text = update.message.text
 
-    # Якщо користувач пише звернення
+    # Користувач пише звернення
     if context.user_data.get("awaiting_support"):
         topic = context.user_data.get("support_topic", "support")
-        # Зберігаємо у файл
         support_requests.setdefault(str(user_id), []).append({
             "topic": topic,
             "message": text
@@ -202,28 +219,41 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         with open(SUPPORT_FILE, "w", encoding="utf-8") as f:
             json.dump(support_requests, f, indent=2, ensure_ascii=False)
 
-        # Повідомлення користувачу
-        await update.message.reply_text(
-            "✅ Ваше повідомлення відправлено в підтримку!"
-        )
+        await update.message.reply_text("✅ Ваше повідомлення відправлено в підтримку!")
 
-        # Повідомлення адміністратору
+        # Адміну повідомлення з кнопкою відповіді
         await context.bot.send_message(
             chat_id=ADMIN_ID,
             text=f"✉️ Нове повідомлення у підтримку\n\n"
                  f"👤 Від: @{username}\n"
                  f"🆔 ID: {user_id}\n"
                  f"📂 Розділ: {topic}\n\n"
-                 f"📨 Текст:\n{text}"
+                 f"📨 Текст:\n{text}",
+            reply_markup=admin_reply_keyboard(user_id)
         )
 
         context.user_data["awaiting_support"] = False
         context.user_data["support_topic"] = None
         return
 
-    # Якщо це не звернення – обробляємо як пошук фільму
+    # Адмін пише відповідь
+    awaiting_reply_id = context.user_data.get("awaiting_admin_reply")
+    if awaiting_reply_id and user_id == ADMIN_ID:
+        try:
+            await context.bot.send_message(
+                chat_id=awaiting_reply_id,
+                text=f"💬 Відповідь від підтримки:\n\n{text}"
+            )
+            await update.message.reply_text("✅ Відповідь надіслано користувачу!")
+        except Exception as e:
+            await update.message.reply_text(f"❌ Помилка при відправці: {e}")
+        context.user_data["awaiting_admin_reply"] = None
+        return
+
+    # Якщо це не звернення – пошук фільму
     await show_film(update, context, text)
 
+# ===== Callback handler =====
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -236,6 +266,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await support(update, context)
     elif query.data.startswith("support_"):
         await support_topic_handler(update, context)
+    elif query.data.startswith("reply_"):
+        await admin_reply_handler(update, context)
     elif query.data == "stats" and update.effective_user.id == ADMIN_ID:
         await stats(update, context)
 

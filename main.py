@@ -19,10 +19,8 @@ ADMIN_ID = int(os.getenv("ADMIN_ID"))
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 GITHUB_OWNER = os.getenv("GITHUB_OWNER")
 GITHUB_REPO = os.getenv("GITHUB_REPO")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # https://your-domain.com/webhook
-PORT = int(os.getenv("PORT", 8443))
 
-for var in [TOKEN, ADMIN_ID, GITHUB_TOKEN, GITHUB_OWNER, GITHUB_REPO, WEBHOOK_URL]:
+for var in [TOKEN, ADMIN_ID, GITHUB_TOKEN, GITHUB_OWNER, GITHUB_REPO]:
     if not var:
         raise ValueError("❌ Перевірте, що всі змінні оточення встановлені")
 
@@ -43,7 +41,6 @@ else:
 
 # ===== GitHub save =====
 def save_stats_to_github():
-    """Зберігає stats.json локально та на GitHub"""
     with open(STATS_FILE, "w", encoding="utf-8") as f:
         json.dump(user_stats, f, indent=2, ensure_ascii=False)
     try:
@@ -256,15 +253,8 @@ async def main_async():
 
     await schedule_raffle(app)
 
-    # Налаштування Webhook
-    await app.bot.set_webhook(WEBHOOK_URL)
-    await app.start()
-    await app.updater.start_webhook(
-        listen="0.0.0.0",
-        port=PORT,
-        webhook_url=WEBHOOK_URL
-    )
-    await app.idle()
+    # Long Polling для Background Worker
+    await app.run_polling()
 
 if __name__ == "__main__":
     import nest_asyncio

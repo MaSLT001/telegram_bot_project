@@ -195,8 +195,8 @@ async def lottery_participants_callback(update: Update, context: ContextTypes.DE
         await update.callback_query.edit_message_text("❌ Учасників поки немає", reply_markup=main_keyboard(True))
         return
     text = "🎁 Учасники розіграшу:\n\n" + "\n".join(
-        f"{user_stats[u]['first_name']} (@{user_stats[u].get('username',''))}" for u in participants
-    )
+    f"{user_stats[u]['first_name']} (@{user_stats[u].get('username','')})" for u in participants
+)
     await update.callback_query.edit_message_text(text, reply_markup=main_keyboard(True))
 
 # ===== Підтримка =====
@@ -266,3 +266,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

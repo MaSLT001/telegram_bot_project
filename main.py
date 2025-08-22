@@ -1,6 +1,7 @@
 import os
 import json
 import random
+import asyncio
 from github import Github
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -279,7 +280,7 @@ async def notify_users_new_giveaway(context):
                 print(f"Не вдалося надіслати повідомлення користувачу {uid}: {e}")
 
 # ===== Автоматичний розіграш =====
-async def run_giveaway(context: ContextTypes.DEFAULT_TYPE):
+async def run_giveaway(context):
     participants = [(uid, data) for uid, data in user_stats.items() if data.get("giveaway")]
 
     if not participants:
@@ -337,8 +338,8 @@ async def movie_by_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     await show_film(update, context, code)
 
-# ===== Main =====
-def main():
+# ===== Асинхронний запуск бота =====
+async def main_async():
     app = ApplicationBuilder().token(TOKEN).build()
 
     # Хендлери
@@ -364,7 +365,7 @@ def main():
     scheduler.start()
 
     print("✅ Бот запущений")
-    app.run_polling()
+    await app.run_polling()
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main_async())

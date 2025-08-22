@@ -73,10 +73,10 @@ def main_keyboard(is_admin=False):
         buttons.append([InlineKeyboardButton("📊 Статистика", callback_data="stats")])
     return InlineKeyboardMarkup(buttons)
 
-def film_keyboard(text, is_admin=False):
+def film_keyboard(film_title, is_admin=False):
     buttons = [
         [
-            InlineKeyboardButton("🔗 Поділитися", switch_inline_query=text),
+            InlineKeyboardButton("🔗 Поділитися", switch_inline_query=film_title),
             InlineKeyboardButton("💬 Підтримка", callback_data="support")
         ],
         [InlineKeyboardButton("🎲 Рандомний фільм", callback_data="random_film")]
@@ -170,10 +170,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def raffle(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await get_message(update).reply_text("🎁 Розіграш MEGOGO! Деталі поки відсутні.")
 
+# ===== Показ статистики =====
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     total_users = len(user_stats)
     total_requests = sum(user_stats.values())
-    await get_message(update).reply_text(
+    message = update.callback_query.message
+    await message.reply_text(
         f"📊 Статистика бота:\nКористувачів: {total_users}\nЗапитів: {total_requests}"
     )
 
@@ -258,18 +260,24 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    if query.data == "random_film":
+    data = query.data
+    user_id = query.from_user.id
+
+    if data == "random_film":
         await random_film(update, context)
-    elif query.data == "raffle":
+    elif data == "raffle":
         await raffle(update, context)
-    elif query.data == "support":
+    elif data == "support":
         await support(update, context)
-    elif query.data.startswith("support_"):
+    elif data.startswith("support_"):
         await support_topic_handler(update, context)
-    elif query.data.startswith("reply_"):
+    elif data.startswith("reply_"):
         await admin_reply_handler(update, context)
-    elif query.data == "stats" and update.effective_user.id == ADMIN_ID:
-        await stats(update, context)
+    elif data == "stats":
+        if user_id == ADMIN_ID:
+            await stats(update, context)
+        else:
+            await query.message.reply_text("❌ Тільки адміністратор може бачити статистику.")
 
 # ===== MAIN =====
 async def main_async():

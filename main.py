@@ -5,9 +5,10 @@ import asyncio
 import nest_asyncio
 from datetime import datetime
 from github import Github
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Bot
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
-    ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
+    ApplicationBuilder, CommandHandler, CallbackQueryHandler,
+    ContextTypes
 )
 from deep_translator import GoogleTranslator
 from difflib import get_close_matches
@@ -111,7 +112,7 @@ def find_film_by_text(text):
     return None
 
 # ===== Показ фільму =====
-last_film_message = None  # Для видалення старих кнопок
+last_film_message = None
 
 async def show_film(update: Update, context: ContextTypes.DEFAULT_TYPE, code: str):
     global last_film_message
@@ -177,43 +178,25 @@ async def show_raffle_participants(update: Update, context: ContextTypes.DEFAULT
         )
     await update.callback_query.edit_message_text(text, reply_markup=main_keyboard(True))
 
-async def raffle_job(app: Bot):
+async def raffle_job(app):
     participants = [u for u,v in user_stats.items() if v.get("raffle")]
     if not participants:
         print("Немає учасників для розіграшу")
-        await app.send_message(ADMIN_ID, "⚠️ Розіграш місячної підписки не проведено – немає учасників.")
         return
-
     winner_id = random.choice(participants)
     winner = user_stats[winner_id]
-
-    # Повідомлення переможцю
     try:
-        await app.send_message(int(winner_id), "🎉 Вітаємо! Ви виграли місячну підписку MEGOGO! Напишіть у підтримку, щоб отримати приз.")
+        await app.bot.send_message(int(winner_id), "🎉 Ви виграли місячну підписку MEGOGO! Напишіть у підтримку, щоб отримати приз.")
+        await app.bot.send_message(int(ADMIN_ID), f"🏆 Переможець: {winner['first_name']} (@{winner.get('username','')})")
     except:
         pass
-
-    # Повідомлення іншим учасникам
-    for uid in participants:
-        if uid != winner_id:
-            try:
-                await app.send_message(int(uid), "❌ Розіграш завершено – на цей раз ви не виграли, спробуйте наступного місяця!")
-            except:
-                pass
-
-    # Лог адміну
-    await app.send_message(int(ADMIN_ID), f"🏆 Розіграш завершено. Переможець: {winner['first_name']} (@{winner.get('username','')})")
-
-    # Очищення учасників
     for u in participants:
         user_stats[u]["raffle"] = False
     save_stats()
 
-    print(f"Розіграш проведено. Переможець: {winner['first_name']} (@{winner.get('username','')})")
-
-async def schedule_raffle(app: Bot):
+async def schedule_raffle(bot):
     scheduler = AsyncIOScheduler()
-    scheduler.add_job(lambda: asyncio.create_task(raffle_job(app)), "cron", day=1, hour=0, minute=0)
+    scheduler.add_job(lambda: asyncio.create_task(raffle_job(bot)), "cron", day=1, hour=0, minute=0)
     scheduler.start()
 
 # ===== Підтримка =====
@@ -262,7 +245,8 @@ async def main_async():
     # Запуск розіграшу
     await schedule_raffle(app.bot)
 
-    await app.run_polling()
+    # Запуск бота з drop_pending_updates=True, щоб уникнути Conflict
+    await app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
     nest_asyncio.apply()

@@ -2,6 +2,7 @@ import os
 import json
 import random
 import asyncio
+import nest_asyncio
 from datetime import datetime
 from github import Github
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -57,14 +58,14 @@ def save_stats():
 def main_keyboard(is_admin=False):
     buttons = [
         [InlineKeyboardButton("🎲 Рандомний фільм", callback_data="random_film")],
-        [InlineKeyboardButton("🎁 Розіграш MEGOGO", callback_data="raffle")],
-        [InlineKeyboardButton("✉️ Підтримка", callback_data="support")]
+        [InlineKeyboardButton("🎁 Розіграш MEGOGO", callback_data="raffle")]
     ]
+    buttons.append([InlineKeyboardButton("✉️ Підтримка", callback_data="support")])
     if is_admin:
         buttons.append([
             InlineKeyboardButton("📊 Статистика", callback_data="stats"),
             InlineKeyboardButton("📢 Відправити всім", callback_data="send_all"),
-            InlineKeyboardButton("👥 Учасники розіграшу", callback_data="raffle_participants")
+            InlineKeyboardButton("🎁 Учасники розіграшу", callback_data="raffle_participants")
         ])
     return InlineKeyboardMarkup(buttons)
 
@@ -79,20 +80,16 @@ def film_keyboard(text, is_admin=False):
     if is_admin:
         buttons.append([
             InlineKeyboardButton("📊 Статистика", callback_data="stats"),
-            InlineKeyboardButton("📢 Відправити всім", callback_data="send_all")
+            InlineKeyboardButton("📢 Відправити всім", callback_data="send_all"),
+            InlineKeyboardButton("🎁 Учасники розіграшу", callback_data="raffle_participants")
         ])
     return InlineKeyboardMarkup(buttons)
 
-def raffle_keyboard():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("✅ Взяти участь", callback_data="raffle_participate")]
-    ])
-
 def support_keyboard():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("Звернення", callback_data="support_ticket")],
-        [InlineKeyboardButton("Співпраця", callback_data="support_collab")],
-        [InlineKeyboardButton("Повідомити про перемогу", callback_data="support_win")]
+        [InlineKeyboardButton("✉️ Звернення", callback_data="support_request")],
+        [InlineKeyboardButton("🤝 Співпраця", callback_data="support_collab")],
+        [InlineKeyboardButton("🏆 Повідомити про перемогу", callback_data="support_winner")]
     ])
 
 # ===== Допоміжна =====
@@ -105,11 +102,9 @@ def find_film_by_text(text):
         translated = GoogleTranslator(source='auto', target='uk').translate(text)
     except:
         translated = text
-
     for film in movies.values():
         if film['title'].lower() == translated.lower():
             return film
-
     titles = [f['title'] for f in movies.values()]
     matches = get_close_matches(translated, titles, n=1, cutoff=0.5)
     if matches:
@@ -117,7 +112,10 @@ def find_film_by_text(text):
     return None
 
 # ===== Показ фільму =====
+last_film_message = None  # Для видалення старих кнопок
+
 async def show_film(update: Update, context: ContextTypes.DEFAULT_TYPE, code: str):
+    global last_film_message
     film = movies.get(code)
     if not film:
         film = find_film_by_text(code)
@@ -126,8 +124,14 @@ async def show_film(update: Update, context: ContextTypes.DEFAULT_TYPE, code: st
         await message.reply_text("❌ Фільм не знайдено", reply_markup=main_keyboard(update.effective_user.id == ADMIN_ID))
         return
     text = f"🎬 *{film['title']}*\n\n{film['desc']}\n\n🔗 {film['link']}"
-    await message.reply_text(text, parse_mode="Markdown", reply_markup=film_keyboard(text, update.effective_user.id == ADMIN_ID))
+    if last_film_message:
+        try:
+            await last_film_message.edit_reply_markup(reply_markup=None)
+        except:
+            pass
+    last_film_message = await message.reply_text(text, parse_mode="Markdown", reply_markup=film_keyboard(text, update.effective_user.id == ADMIN_ID))
 
+# ===== Рандомний фільм =====
 async def random_film(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not movies:
         await update.callback_query.answer("❌ Список фільмів порожній.")
@@ -148,92 +152,99 @@ async def show_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def raffle_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = get_message(update)
     await message.reply_text(
-        "🎁 Розіграш MEGOGO!\nНатисніть кнопку, щоб взяти участь:",
-        reply_markup=raffle_keyboard()
+        "🎁 Розіграш місячної підписки MEGOGO!\n\nНатисніть кнопку нижче щоб взяти участь.",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Взяти участь", callback_data="raffle_join")]])
     )
 
-async def raffle_participation(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def raffle_join(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = str(update.effective_user.id)
     if uid not in user_stats:
-        user_stats[uid] = {"username": update.effective_user.username, "first_name": update.effective_user.first_name, "raffle": True}
-    else:
-        user_stats[uid]["raffle"] = True
+        user_stats[uid] = {"username": update.effective_user.username, "first_name": update.effective_user.first_name}
+    user_stats[uid]["raffle"] = True
     save_stats()
-    await update.callback_query.answer("✅ Ви взяли участь у розіграші!", show_alert=True)
-    await update.callback_query.edit_message_text("Ви взяли участь у розіграші! Удачі!")
+    await update.callback_query.answer("✅ Ви стали учасником розіграшу!")
+    await update.callback_query.edit_message_text("✅ Ви стали учасником розіграшу!")
 
 async def show_raffle_participants(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         await update.callback_query.answer("❌ Немає доступу", show_alert=True)
         return
-    participants = [u for u, v in user_stats.items() if v.get("raffle")]
+    participants = [u for u,v in user_stats.items() if v.get("raffle")]
     if not participants:
-        text = "Немає учасників розіграшу."
+        text = "❌ Немає учасників розіграшу"
     else:
         text = "🎁 Учасники розіграшу:\n\n" + "\n".join(
-            f"{user_stats[u]['first_name']} (@{user_stats[u].get('username','')})" for u in participants
+            [f"{user_stats[u]['first_name']} (@{user_stats[u].get('username',''))})" for u in participants]
         )
     await update.callback_query.edit_message_text(text, reply_markup=main_keyboard(True))
 
-# ===== Команди =====
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    uid = str(user.id)
-    if uid not in user_stats:
-        user_stats[uid] = {"username": user.username, "first_name": user.first_name, "raffle": False}
-        save_stats()
-    await update.message.reply_text(
-        f"Привіт, {user.first_name}!👋 Введи назву фільму або його код, також можеш натиснути кнопку нижче щоб ми тобі запропонували фільм😉",
-        reply_markup=main_keyboard(user.id == ADMIN_ID)
-    )
+async def raffle_job(app):
+    participants = [u for u,v in user_stats.items() if v.get("raffle")]
+    if not participants:
+        print("Немає учасників для розіграшу")
+        return
+    winner_id = random.choice(participants)
+    winner = user_stats[winner_id]
+    try:
+        await app.bot.send_message(int(winner_id), "🎉 Ви виграли місячну підписку MEGOGO! Напишіть у підтримку, щоб отримати приз.")
+        await app.bot.send_message(int(ADMIN_ID), f"🏆 Переможець: {winner['first_name']} (@{winner.get('username','')})")
+    except:
+        pass
+    for u in participants:
+        user_stats[u]["raffle"] = False
+    save_stats()
 
-async def movie_by_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    code = update.message.text.strip()
-    uid = str(update.effective_user.id)
-    if uid not in user_stats:
-        user_stats[uid] = {"username": update.effective_user.username, "first_name": update.effective_user.first_name, "raffle": False}
-        save_stats()
-    await show_film(update, context, code)
-
-# ===== Scheduler для розіграшу =====
-def schedule_raffle(app):
+async def schedule_raffle(app):
     scheduler = AsyncIOScheduler()
-    async def raffle_job():
-        participants = [u for u, v in user_stats.items() if v.get("raffle")]
-        if not participants:
-            print("Немає учасників для розіграшу")
-            return
-        winner_id = random.choice(participants)
-        winner = user_stats[winner_id]
-        # Повідомлення переможцю
-        try:
-            await app.bot.send_message(int(winner_id), "🎉 Ви виграли місячну підписку MEGOGO! Напишіть у підтримку, щоб отримати приз.")
-            await app.bot.send_message(int(ADMIN_ID), f"🏆 Переможець розіграшу: {winner['first_name']} (@{winner.get('username','')})")
-        except:
-            pass
-        # Обнуляємо розіграш
-        for u in participants:
-            user_stats[u]["raffle"] = False
-        save_stats()
-    scheduler.add_job(lambda: asyncio.create_task(raffle_job()), "cron", day=1, hour=0, minute=0)
+    scheduler.add_job(lambda: asyncio.create_task(raffle_job(app)), "cron", day=1, hour=0, minute=0)
     scheduler.start()
 
-# ===== Основна функція =====
-def main():
+# ===== Підтримка =====
+async def support_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.answer()
+    await update.callback_query.message.reply_text(
+        "Виберіть тип повідомлення:", reply_markup=support_keyboard()
+    )
+
+# ===== Start =====
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = str(update.effective_user.id)
+    if uid not in user_stats:
+        user_stats[uid] = {"username": update.effective_user.username, "first_name": update.effective_user.first_name}
+        save_stats()
+    await update.message.reply_text(
+        "Вітаю! Оберіть дію:", reply_markup=main_keyboard(update.effective_user.id==ADMIN_ID)
+    )
+
+# ===== Обробники =====
+async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    data = update.callback_query.data
+    if data == "random_film":
+        await random_film(update, context)
+    elif data == "raffle":
+        await raffle_start(update, context)
+    elif data == "raffle_join":
+        await raffle_join(update, context)
+    elif data == "raffle_participants":
+        await show_raffle_participants(update, context)
+    elif data == "support":
+        await support_callback(update, context)
+    elif data.startswith("support"):
+        await update.callback_query.answer("Відправте повідомлення в чат підтримки")
+    elif data == "stats":
+        await show_stats(update, context)
+    else:
+        await update.callback_query.answer()
+
+# ===== MAIN =====
+async def main_async():
     app = ApplicationBuilder().token(TOKEN).build()
-
-    # Обробники
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, movie_by_code))
-    app.add_handler(CallbackQueryHandler(random_film, pattern="^random_film$"))
-    app.add_handler(CallbackQueryHandler(show_stats, pattern="^stats$"))
-    app.add_handler(CallbackQueryHandler(raffle_start, pattern="^raffle$"))
-    app.add_handler(CallbackQueryHandler(raffle_participation, pattern="^raffle_participate$"))
-    app.add_handler(CallbackQueryHandler(show_raffle_participants, pattern="^raffle_participants$"))
-
-    print("✅ Бот запущений")
-    schedule_raffle(app)
-    app.run_polling()  # запускає event loop
+    app.add_handler(CallbackQueryHandler(callback_handler))
+    # Запуск розіграшу
+    await schedule_raffle(app)
+    await app.run_polling()
 
 if __name__ == "__main__":
-    main()
+    nest_asyncio.apply()
+    asyncio.run(main_async())

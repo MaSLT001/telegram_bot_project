@@ -11,6 +11,7 @@ from telegram.ext import (
 from deep_translator import GoogleTranslator
 from difflib import get_close_matches
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
 
 # ===== ENV змінні =====
 TOKEN = os.getenv("BOT_TOKEN")
@@ -69,7 +70,8 @@ def update_user_stats(user):
     if user_id not in user_stats:
         user_stats[user_id] = {
             "username": user.username or "немає",
-            "first_name": user.first_name or "немає"
+            "first_name": user.first_name or "немає",
+            "raffle": False  # за замовчуванням участь у розіграші відсутня
         }
         with open(STATS_FILE, "w", encoding="utf-8") as f:
             json.dump(user_stats, f, indent=2, ensure_ascii=False)
@@ -109,6 +111,10 @@ def admin_reply_keyboard(user_id):
         [InlineKeyboardButton("💬 Відповісти", callback_data=f"reply_{user_id}")]
     ])
 
+def winner_keyboard():
+    # Та сама клавіатура що і для підтримки
+    return support_keyboard()
+
 # ===== Допоміжна =====
 def get_message(update: Update):
     return update.message or update.callback_query.message
@@ -139,7 +145,7 @@ def find_film_by_text(text):
 # ===== Показ фільму =====
 async def show_film(update: Update, context: ContextTypes.DEFAULT_TYPE, code_or_text: str):
     user = update.effective_user
-    update_user_stats(user)  # додаємо користувача
+    update_user_stats(user)
 
     film = find_film_by_text(code_or_text)
     message = get_message(update)
@@ -174,20 +180,45 @@ async def random_film(update: Update, context: ContextTypes.DEFAULT_TYPE):
     code = random.choice(list(movies.keys()))
     await show_film(update, context, code)
 
-# ===== Обробники команд =====
+# ===== Команда start =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    update_user_stats(user)  # додаємо користувача
+    update_user_stats(user)
     await update.message.reply_text(
         f"Привіт, {user.first_name}! 👋 Введи назву фільму або натисни кнопку нижче.",
         reply_markup=main_keyboard(user.id == ADMIN_ID)
     )
 
+# ===== Розіграш =====
 async def raffle(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    update_user_stats(update.effective_user)  # додаємо користувача
-    await get_message(update).reply_text("🎁 Розіграш MEGOGO! Деталі поки відсутні.")
+    user = update.effective_user
+    update_user_stats(user)
+    message = get_message(update)
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ Взяти участь", callback_data="raffle_join")]
+    ])
+    await message.reply_text(
+        "🎁 Розіграш MEGOGO!\n\nНатисніть кнопку нижче, щоб взяти участь у розіграші максимальної підписки.",
+        reply_markup=keyboard
+    )
 
-# ===== Показ статистики =====
+async def raffle_join_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    user_id = str(query.from_user.id)
+
+    if user_id not in user_stats:
+        update_user_stats(query.from_user)
+
+    user_stats[user_id]["raffle"] = True
+    with open(STATS_FILE, "w", encoding="utf-8") as f:
+        json.dump(user_stats, f, indent=2, ensure_ascii=False)
+
+    await query.message.edit_text(
+        "✅ Ви успішно взяли участь у розіграші MEGOGO!"
+    )
+
+# ===== Статистика =====
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         message = update.callback_query.message
@@ -201,7 +232,7 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ===== Підтримка =====
 async def support(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    update_user_stats(update.effective_user)  # додаємо користувача
+    update_user_stats(update.effective_user)
     await get_message(update).reply_text(
         "Виберіть тему звернення:",
         reply_markup=support_keyboard()
@@ -214,7 +245,6 @@ async def support_topic_handler(update: Update, context: ContextTypes.DEFAULT_TY
     context.user_data["awaiting_support"] = True
     await query.message.reply_text("✉️ Введіть ваше повідомлення для підтримки:")
 
-# ===== Callback для відповіді адміна =====
 async def admin_reply_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -229,13 +259,11 @@ async def admin_reply_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
 # ===== Text handler =====
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    update_user_stats(user)  # додаємо користувача
-
+    update_user_stats(user)
     username = user.username or "немає"
     text = update.message.text
     user_id = user.id
 
-    # Користувач пише звернення
     if context.user_data.get("awaiting_support"):
         topic = context.user_data.get("support_topic", "support")
         support_requests.setdefault(str(user_id), []).append({
@@ -247,7 +275,6 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await update.message.reply_text("✅ Ваше повідомлення відправлено в підтримку!")
 
-        # Адміну повідомлення з кнопкою відповіді
         await context.bot.send_message(
             chat_id=ADMIN_ID,
             text=f"✉️ Нове повідомлення у підтримку\n\n"
@@ -262,7 +289,6 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["support_topic"] = None
         return
 
-    # Адмін пише відповідь
     awaiting_reply_id = context.user_data.get("awaiting_admin_reply")
     if awaiting_reply_id and user_id == ADMIN_ID:
         try:
@@ -276,7 +302,6 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["awaiting_admin_reply"] = None
         return
 
-    # Якщо це не звернення – пошук фільму
     await show_film(update, context, text)
 
 # ===== Callback handler =====
@@ -284,13 +309,15 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     user_id = query.from_user.id
-    update_user_stats(query.from_user)  # додаємо користувача
+    update_user_stats(query.from_user)
 
     data = query.data
     if data == "random_film":
         await random_film(update, context)
     elif data == "raffle":
         await raffle(update, context)
+    elif data == "raffle_join":
+        await raffle_join_handler(update, context)
     elif data == "support":
         await support(update, context)
     elif data.startswith("support_"):
@@ -302,6 +329,32 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await stats(update, context)
         else:
             await query.message.reply_text("❌ Тільки адміністратор може бачити статистику.")
+
+# ===== Розіграш щомісячний =====
+async def monthly_raffle(context: ContextTypes.DEFAULT_TYPE):
+    participants = [uid for uid, u in user_stats.items() if u.get("raffle")]
+    if not participants:
+        print("🎁 Немає учасників для розіграшу цього місяця.")
+        return
+
+    winner_id = random.choice(participants)
+    user_stats[winner_id]["raffle"] = False
+    # скидаємо інших користувачів
+    for uid in user_stats:
+        user_stats[uid]["raffle"] = False
+
+    with open(STATS_FILE, "w", encoding="utf-8") as f:
+        json.dump(user_stats, f, indent=2, ensure_ascii=False)
+
+    # Повідомлення переможцю
+    try:
+        await context.bot.send_message(
+            chat_id=int(winner_id),
+            text="🏆 Вітаємо! Ви виграли місячну підписку MEGOGO!",
+            reply_markup=winner_keyboard()
+        )
+    except Exception as e:
+        print("❌ Не вдалося повідомити переможця:", e)
 
 # ===== MAIN =====
 async def main_async():
@@ -315,7 +368,9 @@ async def main_async():
     # Text
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
 
+    # Scheduler
     scheduler = AsyncIOScheduler()
+    scheduler.add_job(monthly_raffle, CronTrigger(day=1, hour=0, minute=0), args=[app])
     scheduler.start()
 
     await app.run_polling()

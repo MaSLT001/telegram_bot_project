@@ -111,8 +111,26 @@ async def show_film(update: Update, context: ContextTypes.DEFAULT_TYPE, code: st
     if not film:
         await message.reply_text("❌ Фільм не знайдено", reply_markup=main_keyboard(update.effective_user.id == ADMIN_ID))
         return
+
+    # Прибираємо кнопки з попереднього повідомлення
+    last_msg_id = context.user_data.get('last_film_message')
+    if last_msg_id:
+        try:
+            await context.bot.edit_message_reply_markup(
+                chat_id=message.chat_id,
+                message_id=last_msg_id,
+                reply_markup=None
+            )
+        except:
+            pass
+
     text = f"🎬 *{film['title']}*\n\n{film['desc']}\n\n🔗 {film['link']}"
-    await message.reply_text(text, parse_mode="Markdown", reply_markup=film_keyboard(text, update.effective_user.id == ADMIN_ID))
+    sent_message = await message.reply_text(
+        text, parse_mode="Markdown", reply_markup=film_keyboard(text, update.effective_user.id == ADMIN_ID)
+    )
+
+    # Зберігаємо ID останнього повідомлення
+    context.user_data['last_film_message'] = sent_message.message_id
 
 async def random_film(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not movies:
@@ -243,7 +261,7 @@ async def giveaway_participants_callback(update: Update, context: ContextTypes.D
             participants.append(f"– {name} {username} (ID: {uid})")
 
     count = len(participants)
-    text = f"📋 Учасники розіграшу ({count}):\n" + "\n".join(participants) if participants else "Немає учасників."
+    text = f"📋 Учасники розіграшу ({count}):\n" + ("\n".join(participants) if participants else "Немає учасників.")
     await update.callback_query.edit_message_text(text, reply_markup=main_keyboard(True))
 
 # ===== Повідомлення всім користувачам про новий розіграш =====

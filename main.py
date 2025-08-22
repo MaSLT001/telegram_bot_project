@@ -211,7 +211,7 @@ async def giveaway_participants_callback(update: Update, context: ContextTypes.D
         await update.callback_query.answer("❌ Немає доступу", show_alert=True)
         return
     participants = [u for u, v in user_stats.items() if v.get(GIVEAWAY_KEY)]
-    text = "🎁 Учасники розіграшу:\n\n" + "\n".join([f"{user_stats[u]['first_name']} (@{user_stats[u].get('username',''))}" for u in participants])
+    text = "🎁 Учасники розіграшу:\n\n" + "\n".join([f"{user_stats[u]['first_name']} (@{user_stats[u].get('username','')})" for u in participants])
     await update.callback_query.edit_message_text(text, reply_markup=main_keyboard(True))
 
 async def run_giveaway(bot):
@@ -306,3 +306,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

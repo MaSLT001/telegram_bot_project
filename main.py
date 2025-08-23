@@ -9,7 +9,6 @@ from telegram.ext import (
     MessageHandler, filters, ContextTypes
 )
 from deep_translator import GoogleTranslator
-from difflib import get_close_matches
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
@@ -64,9 +63,7 @@ else:
 # ===== Збереження статистики асинхронно =====
 async def save_user_stats_async():
     content = json.dumps(user_stats, indent=2, ensure_ascii=False)
-    # Локальний файл
     await asyncio.to_thread(lambda: open(STATS_FILE, "w", encoding="utf-8").write(content))
-    # GitHub
     try:
         g = Github(GITHUB_TOKEN)
         repo = g.get_user(GITHUB_OWNER).get_repo(GITHUB_REPO)
@@ -87,7 +84,6 @@ def update_user_stats(user):
             "first_name": user.first_name or "немає",
             "raffle": False
         }
-    # Відкладене асинхронне збереження
     asyncio.create_task(save_user_stats_async())
 
 # ===== Розіграш активний? =====
@@ -180,6 +176,15 @@ async def random_film(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     code = random.choice(list(movies.keys()))
     await show_film(update, context, code)
+
+# ===== Старт =====
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    update_user_stats(user)
+    await update.message.reply_text(
+        f"Привіт, {user.first_name}! 👋 Введи код або назву фільму, також нижче є кнопка рандомного фільму.",
+        reply_markup=main_keyboard(user.id == ADMIN_ID)
+    )
 
 # ===== MAIN =====
 async def main_async():

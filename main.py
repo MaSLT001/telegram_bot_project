@@ -237,12 +237,44 @@ async def admin_reply_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     context.user_data["awaiting_admin_reply"] = user_id
     await query.message.reply_text(f"✏️ Введіть відповідь для користувача ID: {user_id}")
 
-# ===== Text handler =====
+# ===== Розіграш щомісячний =====
+async def monthly_raffle(context: ContextTypes.DEFAULT_TYPE):
+    participants = [uid for uid, u in user_stats.items() if u.get("raffle")]
+    if participants:
+        winner_id = random.choice(participants)
+        try:
+            await context.bot.send_message(
+                chat_id=int(winner_id),
+                text="🏆 Вітаємо! Ви виграли місячну підписку MEGOGO!",
+                reply_markup=winner_keyboard()
+            )
+        except Exception as e:
+            print("❌ Не вдалося повідомити переможця:", e)
+
+    # Скидаємо всім статус участі
+    for uid in user_stats:
+        user_stats[uid]["raffle"] = False
+    with open(STATS_FILE, "w", encoding="utf-8") as f:
+        json.dump(user_stats, f, indent=2, ensure_ascii=False)
+
+    # Сповіщення про новий розіграш
+    for uid in user_stats:
+        try:
+            keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("✅ Взяти участь", callback_data="raffle_join")]])
+            await context.bot.send_message(
+                chat_id=int(uid),
+                text="🎁 Новий розіграш MEGOGO розпочато! Натисніть кнопку нижче, щоб взяти участь.",
+                reply_markup=keyboard
+            )
+        except Exception as e:
+            print(f"❌ Не вдалося повідомити користувача {uid}: {e}")
+
+# ===== Текстовий та медіа хендлер =====
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     update_user_stats(user)
     username = user.username or "немає"
-    text = update.message.text
+    text = update.message.text if update.message else ""
     user_id = user.id
 
     # ===== Розсилка =====
@@ -290,6 +322,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = query.from_user.id
     update_user_stats(query.from_user)
     data = query.data
+
     if data == "random_film":
         await random_film(update, context)
     elif data == "raffle":
@@ -313,52 +346,38 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await query.message.reply_text("❌ Тільки адміністратор може бачити учасників розіграшу.")
     elif data == "broadcast":
-        await broadcast_start(update, context)
+        if user_id == ADMIN_ID:
+            context.user_data["awaiting_broadcast"] = True
+            await query.message.reply_text("✏️ Введіть повідомлення або надішліть фото/відео для розсилки:")
     elif data == "broadcast_confirm":
-        await broadcast_confirm(update, context)
+        if user_id == ADMIN_ID and context.user_data.get("broadcast_message"):
+            msg = context.user_data.pop("broadcast_message")
+            for uid in user_stats:
+                try:
+                    if msg.text:
+                        await context.bot.send_message(chat_id=int(uid), text=msg.text)
+                    elif msg.photo:
+                        await context.bot.send_photo(chat_id=int(uid), photo=msg.photo[-1].file_id, caption=msg.caption or "")
+                    elif msg.video:
+                        await context.bot.send_video(chat_id=int(uid), video=msg.video.file_id, caption=msg.caption or "")
+                except Exception as e:
+                    print(f"❌ Не вдалося надіслати користувачу {uid}: {e}")
+            await query.message.reply_text("✅ Розсилка виконана!")
+            context.user_data["awaiting_broadcast"] = False
     elif data == "broadcast_cancel":
-        await broadcast_cancel(update, context)
+        context.user_data["awaiting_broadcast"] = False
+        await query.message.reply_text("❌ Розсилка скасована.")
 
-# ===== Broadcast confirm/cancel =====
-async def broadcast_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ===== Відображення учасників розіграшу =====
+async def raffle_participants_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    if query.from_user.id != ADMIN_ID:
-        return
-    message = context.user_data.get("broadcast_message")
-    if not message:
-        await query.message.reply_text("❌ Немає повідомлення для розсилки.")
-        return
-
-    sent_count = 0
-    failed_count = 0
-    for uid in user_stats.keys():
-        try:
-            if message.text and not (message.photo or message.video):
-                await context.bot.send_message(chat_id=int(uid), text=message.text)
-            elif message.photo:
-                await context.bot.send_photo(chat_id=int(uid), photo=message.photo[-1].file_id,
-                                             caption=message.caption or message.text or "")
-            elif message.video:
-                await context.bot.send_video(chat_id=int(uid), video=message.video.file_id,
-                                             caption=message.caption or message.text or "")
-            sent_count += 1
-        except Exception as e:
-            print(f"❌ Не вдалося відправити {uid}: {e}")
-            failed_count += 1
-
-    await query.message.reply_text(f"📢 Розсилка завершена!\n✅ Успішно: {sent_count}\n❌ Помилок: {failed_count}")
-    context.user_data["awaiting_broadcast"] = False
-    context.user_data["broadcast_message"] = None
-
-
-async def broadcast_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    context.user_data["awaiting_broadcast"] = False
-    context.user_data["broadcast_message"] = None
-    await query.message.reply_text("❌ Розсилка скасована.")
-
+    participants = [f"{u['first_name']} (@{u['username']})" for u in user_stats.values() if u.get("raffle")]
+    if participants:
+        text = "👥 Учасники розіграшу:\n\n" + "\n".join(participants)
+    else:
+        text = "❌ Наразі немає учасників розіграшу."
+    await query.message.reply_text(text)
 
 # ===== MAIN =====
 async def main_async():
@@ -367,12 +386,10 @@ async def main_async():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
-    app.add_handler(MessageHandler(filters.PHOTO | filters.VIDEO, text_handler))
     scheduler = AsyncIOScheduler()
     scheduler.add_job(monthly_raffle, CronTrigger(day=1, hour=0, minute=0), args=[app])
     scheduler.start()
     await app.run_polling()
-
 
 if __name__ == "__main__":
     import nest_asyncio

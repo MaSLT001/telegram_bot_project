@@ -47,17 +47,16 @@ if os.path.exists(SUPPORT_FILE):
 else:
     support_requests = {}
 
-# ===== Функція збереження статистики =====
+# ===== Збереження статистики =====
 def save_user_stats():
     # Локальне збереження
     with open(STATS_FILE, "w", encoding="utf-8") as f:
         json.dump(user_stats, f, indent=2, ensure_ascii=False)
-    
-    # Збереження на GitHub
+    # GitHub
     try:
-        content = json.dumps(user_stats, indent=2, ensure_ascii=False)
         g = Github(GITHUB_TOKEN)
         repo = g.get_user(GITHUB_OWNER).get_repo(GITHUB_REPO)
+        content = json.dumps(user_stats, indent=2, ensure_ascii=False)
         try:
             file = repo.get_contents(STATS_FILE)
             repo.update_file(STATS_FILE, "Update stats.json", content, file.sha)
@@ -66,7 +65,7 @@ def save_user_stats():
             repo.create_file(STATS_FILE, "Create stats.json", content)
             print("✅ Створено новий файл stats.json на GitHub")
     except Exception as e:
-        print("❌ Помилка при збереженні статистики на GitHub:", e)
+        print("❌ Помилка GitHub:", e)
 
 # ===== Оновлення користувача =====
 def update_user_stats(user):
@@ -77,7 +76,7 @@ def update_user_stats(user):
             "first_name": user.first_name or "немає",
             "raffle": False
         }
-    save_user_stats()  # Зберігаємо статистику після будь-якої зміни
+    save_user_stats()  # ✅ Зберігаємо після будь-якої зміни
 
 # ===== Розіграш активний? =====
 def is_raffle_active():
@@ -187,32 +186,58 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=main_keyboard(user.id == ADMIN_ID)
     )
 
-# ===== Розіграш =====
-async def raffle(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ===== Текстовий та медіа хендлер =====
+async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     update_user_stats(user)
-    message = get_message(update)
-    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("✅ Взяти участь", callback_data="raffle_join")]])
-    await message.reply_text(
-        "🎁 Розіграш MEGOGO!\n\nНатисніть кнопку нижче, щоб взяти участь у розіграші максимальної підписки.",
-        reply_markup=keyboard
-    )
+    text = update.message.text if update.message else ""
+    user_id = user.id
 
-async def raffle_join_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    user_id = str(query.from_user.id)
-    if user_id not in user_stats:
-        update_user_stats(query.from_user)
-    user_stats[user_id]["raffle"] = True
-    save_user_stats()  # ✅ Автозбереження
-    await query.message.edit_text("✅ Ви успішно взяли участь у розіграші MEGOGO!")
+    # ===== Розсилка =====
+    if context.user_data.get("awaiting_broadcast"):
+        context.user_data["broadcast_message"] = update.message
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ Так, надіслати", callback_data="broadcast_confirm")],
+            [InlineKeyboardButton("❌ Скасувати", callback_data="broadcast_cancel")]
+        ])
+        await update.message.reply_text(
+            "⚠️ Ви впевнені, що хочете надіслати це повідомлення всім користувачам?",
+            reply_markup=keyboard
+        )
+        return
+
+    # ===== Підтримка =====
+    if context.user_data.get("awaiting_support"):
+        topic = context.user_data.get("support_topic", "support")
+        support_requests.setdefault(str(user_id), []).append({"topic": topic, "message": text})
+        with open(SUPPORT_FILE, "w", encoding="utf-8") as f:
+            json.dump(support_requests, f, indent=2, ensure_ascii=False)
+        await update.message.reply_text("✅ Ваше повідомлення відправлено в підтримку!")
+        await context.bot.send_message(chat_id=ADMIN_ID,
+            text=f"✉️ Нове повідомлення у підтримку\n\n👤 Від: @{user.username}\n🆔 ID: {user_id}\n📂 Розділ: {topic}\n\n📨 Текст:\n{text}",
+            reply_markup=admin_reply_keyboard(user_id))
+        context.user_data["awaiting_support"] = False
+        context.user_data["support_topic"] = None
+        return
+
+    # ===== Відповідь адміна =====
+    awaiting_reply_id = context.user_data.get("awaiting_admin_reply")
+    if awaiting_reply_id and user_id == ADMIN_ID:
+        try:
+            await context.bot.send_message(chat_id=awaiting_reply_id, text=f"💬 Відповідь від підтримки:\n\n{text}")
+            await update.message.reply_text("✅ Відповідь надіслано користувачу!")
+        except Exception as e:
+            await update.message.reply_text(f"❌ Помилка при відправці: {e}")
+        context.user_data["awaiting_admin_reply"] = None
+        return
+
+    # ===== Показ фільму =====
+    await show_film(update, context, text)
 
 # ===== Callback handler =====
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    user_id = query.from_user.id
     update_user_stats(query.from_user)
     data = query.data
 
@@ -229,21 +254,21 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data.startswith("reply_"):
         await admin_reply_handler(update, context)
     elif data == "stats":
-        if user_id == ADMIN_ID:
+        if query.from_user.id == ADMIN_ID:
             await stats(update, context)
         else:
             await query.message.reply_text("❌ Тільки адміністратор може бачити статистику.")
     elif data == "raffle_participants":
-        if user_id == ADMIN_ID:
+        if query.from_user.id == ADMIN_ID:
             await raffle_participants_handler(update, context)
         else:
             await query.message.reply_text("❌ Тільки адміністратор може бачити учасників розіграшу.")
     elif data == "broadcast":
-        if user_id == ADMIN_ID:
+        if query.from_user.id == ADMIN_ID:
             context.user_data["awaiting_broadcast"] = True
             await query.message.reply_text("✏️ Введіть повідомлення або надішліть фото/відео для розсилки:")
     elif data == "broadcast_confirm":
-        if user_id == ADMIN_ID and context.user_data.get("broadcast_message"):
+        if query.from_user.id == ADMIN_ID and context.user_data.get("broadcast_message"):
             msg = context.user_data.pop("broadcast_message")
             for uid in user_stats:
                 try:
@@ -268,12 +293,12 @@ async def main_async():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
-    
+
     # Розіграш щомісячний
     scheduler = AsyncIOScheduler()
     scheduler.add_job(monthly_raffle, CronTrigger(day=1, hour=0, minute=0), args=[app])
     scheduler.start()
-    
+
     await app.run_polling()
 
 if __name__ == "__main__":

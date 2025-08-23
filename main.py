@@ -85,7 +85,7 @@ def film_keyboard(film_title, is_admin=False):
         [
             InlineKeyboardButton("🔗 Поділитися", switch_inline_query=film_title),
             InlineKeyboardButton("💬 Підтримка", callback_data="support"),
-            InlineKeyboardButton("🎁 Розіграш MEGOGO", callback_data="raffle")
+            InlineKeyboardButton("🎁 Розіграш", callback_data="raffle")
         ],
         [InlineKeyboardButton("🎲 Рандомний фільм", callback_data="random_film")]
     ]
@@ -361,3 +361,4 @@ if __name__ == "__main__":
     import nest_asyncio
     nest_asyncio.apply()
     asyncio.run(main_async())
+

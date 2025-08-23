@@ -49,10 +49,8 @@ else:
 
 # ===== Збереження статистики =====
 def save_user_stats():
-    # Локальне збереження
     with open(STATS_FILE, "w", encoding="utf-8") as f:
         json.dump(user_stats, f, indent=2, ensure_ascii=False)
-    # GitHub
     try:
         g = Github(GITHUB_TOKEN)
         repo = g.get_user(GITHUB_OWNER).get_repo(GITHUB_REPO)
@@ -186,7 +184,38 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=main_keyboard(user.id == ADMIN_ID)
     )
 
-# ===== Текстовий та медіа хендлер =====
+# ===== Розіграш щомісячний =====
+async def monthly_raffle(context: ContextTypes.DEFAULT_TYPE):
+    participants = [uid for uid, u in user_stats.items() if u.get("raffle")]
+    if participants:
+        winner_id = random.choice(participants)
+        try:
+            await context.bot.send_message(
+                chat_id=int(winner_id),
+                text="🏆 Вітаємо! Ви виграли місячну підписку MEGOGO!",
+                reply_markup=winner_keyboard()
+            )
+        except Exception as e:
+            print("❌ Не вдалося повідомити переможця:", e)
+
+    # Скидаємо всім статус участі
+    for uid in user_stats:
+        user_stats[uid]["raffle"] = False
+    save_user_stats()
+
+    # Сповіщення про новий розіграш
+    for uid in user_stats:
+        try:
+            keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("✅ Взяти участь", callback_data="raffle_join")]])
+            await context.bot.send_message(
+                chat_id=int(uid),
+                text="🎁 Новий розіграш MEGOGO розпочато! Натисніть кнопку нижче, щоб взяти участь.",
+                reply_markup=keyboard
+            )
+        except Exception as e:
+            print(f"❌ Не вдалося повідомити користувача {uid}: {e}")
+
+# ===== Текстовий хендлер =====
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     update_user_stats(user)
@@ -286,15 +315,38 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["awaiting_broadcast"] = False
         await query.message.reply_text("❌ Розсилка скасована.")
 
+# ===== Розіграш =====
+async def raffle(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    update_user_stats(user)
+    message = get_message(update)
+    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("✅ Взяти участь", callback_data="raffle_join")]])
+    await message.reply_text(
+        "🎁 Розіграш MEGOGO!\n\nНатисніть кнопку нижче, щоб взяти участь у розіграші максимальної підписки.",
+        reply_markup=keyboard
+    )
+
+async def raffle_join_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    user_id = str(query.from_user.id)
+    if user_id not in user_stats:
+        update_user_stats(query.from_user)
+    user_stats[user_id]["raffle"] = True
+    save_user_stats()
+    await query.message.edit_text("✅ Ви успішно взяли участь у розіграші MEGOGO!")
+
 # ===== MAIN =====
 async def main_async():
     app = ApplicationBuilder().token(TOKEN).build()
     await app.bot.delete_webhook(drop_pending_updates=True)
+
+    # Хендлери
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
 
-    # Розіграш щомісячний
+    # Scheduler
     scheduler = AsyncIOScheduler()
     scheduler.add_job(monthly_raffle, CronTrigger(day=1, hour=0, minute=0), args=[app])
     scheduler.start()

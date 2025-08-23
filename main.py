@@ -69,29 +69,29 @@ def is_raffle_active():
 
 # ===== Клавіатури =====
 def main_keyboard(is_admin=False):
-    raffle_text = "🎁 Розіграш MEGOGO"
-    if is_raffle_active():
-        raffle_text += " (активний)"
     buttons = [
         [InlineKeyboardButton("🎲 Рандомний фільм", callback_data="random_film")],
-        [InlineKeyboardButton(raffle_text, callback_data="raffle")],
+        [InlineKeyboardButton("🎁 Розіграш MEGOGO", callback_data="raffle")],
         [InlineKeyboardButton("✉️ Підтримка", callback_data="support")]
     ]
     if is_admin:
         buttons.append([InlineKeyboardButton("📊 Статистика", callback_data="stats")])
         buttons.append([InlineKeyboardButton("👥 Учасники розіграшу", callback_data="raffle_participants")])
+        buttons.append([InlineKeyboardButton("📢 Розсилка", callback_data="broadcast")])
     return InlineKeyboardMarkup(buttons)
 
 def film_keyboard(film_title, is_admin=False):
     buttons = [
         [
             InlineKeyboardButton("🔗 Поділитися", switch_inline_query=film_title),
-            InlineKeyboardButton("💬 Підтримка", callback_data="support")
+            InlineKeyboardButton("💬 Підтримка", callback_data="support"),
+            InlineKeyboardButton("🎁 Розіграш MEGOGO", callback_data="raffle")  # 🎁 завжди під фільмами
         ],
         [InlineKeyboardButton("🎲 Рандомний фільм", callback_data="random_film")]
     ]
     if is_admin:
         buttons.append([InlineKeyboardButton("📊 Статистика", callback_data="stats")])
+        buttons.append([InlineKeyboardButton("📢 Розсилка", callback_data="broadcast")])
     return InlineKeyboardMarkup(buttons)
 
 def support_keyboard():
@@ -225,6 +225,29 @@ async def admin_reply_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     context.user_data["awaiting_admin_reply"] = user_id
     await query.message.reply_text(f"✏️ Введіть відповідь для користувача ID: {user_id}")
 
+# ===== Розсилка =====
+async def broadcast_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if query.from_user.id != ADMIN_ID:
+        await query.message.reply_text("❌ Тільки адміністратор може робити розсилку.")
+        return
+    context.user_data["awaiting_broadcast"] = True
+    await query.message.reply_text("✏️ Введіть текст розсилки:")
+
+async def process_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if context.user_data.get("awaiting_broadcast") and update.effective_user.id == ADMIN_ID:
+        text = update.message.text
+        sent, failed = 0, 0
+        for uid in user_stats.keys():
+            try:
+                await context.bot.send_message(chat_id=int(uid), text=f"📢 Оголошення:\n\n{text}")
+                sent += 1
+            except:
+                failed += 1
+        await update.message.reply_text(f"✅ Розсилка завершена!\n📨 Надіслано: {sent}\n❌ Помилок: {failed}")
+        context.user_data["awaiting_broadcast"] = False
+
 # ===== Text handler =====
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -234,7 +257,6 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if context.user_data.get("awaiting_support"):
         topic = context.user_data.get("support_topic", "support")
-        # ... код для збереження support_requests залишаємо як у тебе ...
         await update.message.reply_text("✅ Ваше повідомлення відправлено в підтримку!")
         await context.bot.send_message(
             chat_id=ADMIN_ID,
@@ -243,6 +265,10 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         context.user_data["awaiting_support"] = False
         context.user_data["support_topic"] = None
+        return
+
+    if context.user_data.get("awaiting_broadcast") and user_id == ADMIN_ID:
+        await process_broadcast(update, context)
         return
 
     awaiting_reply_id = context.user_data.get("awaiting_admin_reply")
@@ -278,6 +304,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await admin_reply_handler(update, context)
     elif data == "stats":
         await stats(update, context)
+    elif data == "broadcast":
+        await broadcast_handler(update, context)
     elif data == "raffle_participants" and query.from_user.id == ADMIN_ID:
         participants = [f"{u['first_name']} (@{u['username']})" for u in user_stats.values() if u.get("raffle")]
         text = "👥 Учасники розіграшу:\n\n" + "\n".join(participants) if participants else "❌ Наразі немає учасників розіграшу."

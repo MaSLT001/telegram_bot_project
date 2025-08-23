@@ -92,6 +92,7 @@ def main_keyboard(is_admin=False):
     if is_admin:
         buttons.append([InlineKeyboardButton("📊 Статистика", callback_data="stats")])
         buttons.append([InlineKeyboardButton("👥 Учасники розіграшу", callback_data="raffle_participants")])
+        buttons.append([InlineKeyboardButton("📢 Розсилка", callback_data="broadcast")])
     return InlineKeyboardMarkup(buttons)
 
 def film_keyboard(film_title, is_admin=False):
@@ -243,6 +244,20 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     username = user.username or "немає"
     text = update.message.text
     user_id = user.id
+
+    # ===== Розсилка =====
+    if context.user_data.get("awaiting_broadcast"):
+        context.user_data["broadcast_message"] = update.message
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ Так, надіслати", callback_data="broadcast_confirm")],
+            [InlineKeyboardButton("❌ Скасувати", callback_data="broadcast_cancel")]
+        ])
+        await update.message.reply_text(
+            "⚠️ Ви впевнені, що хочете надіслати це повідомлення всім користувачам?",
+            reply_markup=keyboard
+        )
+        return
+
     if context.user_data.get("awaiting_support"):
         topic = context.user_data.get("support_topic", "support")
         support_requests.setdefault(str(user_id), []).append({"topic": topic, "message": text})
@@ -255,6 +270,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["awaiting_support"] = False
         context.user_data["support_topic"] = None
         return
+
     awaiting_reply_id = context.user_data.get("awaiting_admin_reply")
     if awaiting_reply_id and user_id == ADMIN_ID:
         try:
@@ -264,6 +280,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"❌ Помилка при відправці: {e}")
         context.user_data["awaiting_admin_reply"] = None
         return
+
     await show_film(update, context, text)
 
 # ===== Callback handler =====
@@ -295,41 +312,53 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await raffle_participants_handler(update, context)
         else:
             await query.message.reply_text("❌ Тільки адміністратор може бачити учасників розіграшу.")
+    elif data == "broadcast":
+        await broadcast_start(update, context)
+    elif data == "broadcast_confirm":
+        await broadcast_confirm(update, context)
+    elif data == "broadcast_cancel":
+        await broadcast_cancel(update, context)
 
-# ===== Відображення учасників розіграшу =====
-async def raffle_participants_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ===== Broadcast confirm/cancel =====
+async def broadcast_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    participants = [f"{u['first_name']} (@{u['username']})" for u in user_stats.values() if u.get("raffle")]
-    if participants:
-        text = "👥 Учасники розіграшу:\n\n" + "\n".join(participants)
-    else:
-        text = "❌ Наразі немає учасників розіграшу."
-    await query.message.reply_text(text)
+    if query.from_user.id != ADMIN_ID:
+        return
+    message = context.user_data.get("broadcast_message")
+    if not message:
+        await query.message.reply_text("❌ Немає повідомлення для розсилки.")
+        return
 
-# ===== Розіграш щомісячний =====
-async def monthly_raffle(context: ContextTypes.DEFAULT_TYPE):
-    participants = [uid for uid, u in user_stats.items() if u.get("raffle")]
-    if participants:
-        winner_id = random.choice(participants)
+    sent_count = 0
+    failed_count = 0
+    for uid in user_stats.keys():
         try:
-            await context.bot.send_message(chat_id=int(winner_id),
-                text="🏆 Вітаємо! Ви виграли місячну підписку MEGOGO!",
-                reply_markup=winner_keyboard())
+            if message.text and not (message.photo or message.video):
+                await context.bot.send_message(chat_id=int(uid), text=message.text)
+            elif message.photo:
+                await context.bot.send_photo(chat_id=int(uid), photo=message.photo[-1].file_id,
+                                             caption=message.caption or message.text or "")
+            elif message.video:
+                await context.bot.send_video(chat_id=int(uid), video=message.video.file_id,
+                                             caption=message.caption or message.text or "")
+            sent_count += 1
         except Exception as e:
-            print("❌ Не вдалося повідомити переможця:", e)
-    for uid in user_stats:
-        user_stats[uid]["raffle"] = False
-    with open(STATS_FILE, "w", encoding="utf-8") as f:
-        json.dump(user_stats, f, indent=2, ensure_ascii=False)
-    for uid in user_stats:
-        try:
-            keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("✅ Взяти участь", callback_data="raffle_join")]])
-            await context.bot.send_message(chat_id=int(uid),
-                text="🎁 Новий розіграш MEGOGO розпочато! Натисніть кнопку нижче, щоб взяти участь.",
-                reply_markup=keyboard)
-        except Exception as e:
-            print(f"❌ Не вдалося повідомити користувача {uid}: {e}")
+            print(f"❌ Не вдалося відправити {uid}: {e}")
+            failed_count += 1
+
+    await query.message.reply_text(f"📢 Розсилка завершена!\n✅ Успішно: {sent_count}\n❌ Помилок: {failed_count}")
+    context.user_data["awaiting_broadcast"] = False
+    context.user_data["broadcast_message"] = None
+
+
+async def broadcast_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    context.user_data["awaiting_broadcast"] = False
+    context.user_data["broadcast_message"] = None
+    await query.message.reply_text("❌ Розсилка скасована.")
+
 
 # ===== MAIN =====
 async def main_async():
@@ -338,10 +367,12 @@ async def main_async():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
+    app.add_handler(MessageHandler(filters.PHOTO | filters.VIDEO, text_handler))
     scheduler = AsyncIOScheduler()
     scheduler.add_job(monthly_raffle, CronTrigger(day=1, hour=0, minute=0), args=[app])
     scheduler.start()
     await app.run_polling()
+
 
 if __name__ == "__main__":
     import nest_asyncio

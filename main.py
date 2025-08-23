@@ -85,7 +85,7 @@ def film_keyboard(film_title, is_admin=False):
         [
             InlineKeyboardButton("🔗 Поділитися", switch_inline_query=film_title),
             InlineKeyboardButton("💬 Підтримка", callback_data="support"),
-            InlineKeyboardButton("🎁 Розіграш", callback_data="raffle")  # 🎁 завжди під фільмами
+            InlineKeyboardButton("🎁 Розіграш MEGOGO", callback_data="raffle")
         ],
         [InlineKeyboardButton("🎲 Рандомний фільм", callback_data="random_film")]
     ]
@@ -191,6 +191,14 @@ async def raffle_join_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     user_stats[user_id]["raffle"] = True
     save_stats()
     await query.message.edit_text("✅ Ви успішно взяли участь у розіграші MEGOGO!")
+
+# ===== Промо =====
+async def promo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = "🎉 Привіт! У нас триває розіграш MEGOGO!\nНатисни кнопку нижче, щоб взяти участь 👇"
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🎁 Розіграш MEGOGO", callback_data="raffle")]
+    ])
+    await update.message.reply_text(text, reply_markup=keyboard)
 
 # ===== Статистика =====
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -334,8 +342,9 @@ async def main_async():
     app = ApplicationBuilder().token(TOKEN).build()
     await app.bot.delete_webhook(drop_pending_updates=True)
 
-    # Command
+    # Commands
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("promo", promo))  # 🔥 команда промо
     # Callbacks
     app.add_handler(CallbackQueryHandler(callback_handler))
     # Text
@@ -352,4 +361,3 @@ if __name__ == "__main__":
     import nest_asyncio
     nest_asyncio.apply()
     asyncio.run(main_async())
-

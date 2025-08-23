@@ -198,12 +198,10 @@ async def monthly_raffle(context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             print("❌ Не вдалося повідомити переможця:", e)
 
-    # Скидаємо всім статус участі
     for uid in user_stats:
         user_stats[uid]["raffle"] = False
     save_user_stats()
 
-    # Сповіщення про новий розіграш
     for uid in user_stats:
         try:
             keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("✅ Взяти участь", callback_data="raffle_join")]])
@@ -309,11 +307,11 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         await context.bot.send_video(chat_id=int(uid), video=msg.video.file_id, caption=msg.caption or "")
                 except Exception as e:
                     print(f"❌ Не вдалося надіслати користувачу {uid}: {e}")
-            await query.message.reply_text("✅ Розсилка виконана!")
+            await query.message.edit_text("✅ Розсилка виконана!")
             context.user_data["awaiting_broadcast"] = False
     elif data == "broadcast_cancel":
         context.user_data["awaiting_broadcast"] = False
-        await query.message.reply_text("❌ Розсилка скасована.")
+        await query.message.edit_text("❌ Розсилка скасована.")
 
 # ===== Розіграш =====
 async def raffle(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -357,4 +355,3 @@ if __name__ == "__main__":
     import nest_asyncio
     nest_asyncio.apply()
     asyncio.run(main_async())
-

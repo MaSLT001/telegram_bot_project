@@ -180,7 +180,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     update_user_stats(user)
     await update.message.reply_text(
-        f"Привіт, {user.first_name}! 👋 Введи назву фільму або натисни кнопку нижче.",
+        f"Привіт, {user.first_name}! 👋 Введи код або назву фільму, також нижче є кнопка рандомного фільму.",
         reply_markup=main_keyboard(user.id == ADMIN_ID)
     )
 
@@ -357,3 +357,4 @@ if __name__ == "__main__":
     import nest_asyncio
     nest_asyncio.apply()
     asyncio.run(main_async())
+

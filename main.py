@@ -9,6 +9,7 @@ from telegram.ext import (
     MessageHandler, filters, ContextTypes
 )
 from deep_translator import GoogleTranslator
+from difflib import get_close_matches
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
@@ -30,7 +31,6 @@ try:
 except FileNotFoundError:
     movies = {}
 
-# ===== Нормалізовані назви для швидкого пошуку =====
 normalized_titles = {f['title'].lower(): code for code, f in movies.items()}
 
 # ===== Кеш перекладів =====
@@ -52,7 +52,6 @@ if os.path.exists(STATS_FILE):
 else:
     user_stats = {}
 
-# ===== Підтримка =====
 SUPPORT_FILE = "support.json"
 if os.path.exists(SUPPORT_FILE):
     with open(SUPPORT_FILE, "r", encoding="utf-8") as f:
@@ -60,7 +59,7 @@ if os.path.exists(SUPPORT_FILE):
 else:
     support_requests = {}
 
-# ===== Збереження статистики асинхронно =====
+# ===== Збереження статистики =====
 async def save_user_stats_async():
     content = json.dumps(user_stats, indent=2, ensure_ascii=False)
     await asyncio.to_thread(lambda: open(STATS_FILE, "w", encoding="utf-8").write(content))
@@ -75,7 +74,6 @@ async def save_user_stats_async():
     except Exception as e:
         print("❌ Помилка GitHub:", e)
 
-# ===== Оновлення користувача =====
 def update_user_stats(user):
     user_id = str(user.id)
     if user_id not in user_stats:
@@ -86,7 +84,6 @@ def update_user_stats(user):
         }
     asyncio.create_task(save_user_stats_async())
 
-# ===== Розіграш активний? =====
 def is_raffle_active():
     return any(u.get("raffle") for u in user_stats.values())
 
@@ -126,14 +123,11 @@ def support_keyboard():
     ])
 
 def admin_reply_keyboard(user_id):
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("💬 Відповісти", callback_data=f"reply_{user_id}")]
-    ])
+    return InlineKeyboardMarkup([[InlineKeyboardButton("💬 Відповісти", callback_data=f"reply_{user_id}")]])
 
 def winner_keyboard():
     return support_keyboard()
 
-# ===== Допоміжна =====
 def get_message(update: Update):
     return update.message or update.callback_query.message
 
@@ -142,12 +136,16 @@ async def find_film_by_text(text):
     if text in movies:
         return movies[text]
     translated = await translate_async(text)
-    translated_lower = translated.lower()
-    if translated_lower in normalized_titles:
-        return movies[normalized_titles[translated_lower]]
-    for film in movies.values():
-        if translated_lower in film['title'].lower():
-            return film
+    t_lower = translated.lower()
+    if t_lower in normalized_titles:
+        return movies[normalized_titles[t_lower]]
+    for f in movies.values():
+        if t_lower in f['title'].lower():
+            return f
+    titles = [f['title'] for f in movies.values()]
+    matches = get_close_matches(translated, titles, n=1, cutoff=0.5)
+    if matches:
+        return next(f for f in movies.values() if f['title'] == matches[0])
     return None
 
 # ===== Показ фільму =====
@@ -164,8 +162,7 @@ async def show_film(update: Update, context: ContextTypes.DEFAULT_TYPE, code_or_
     if last_msg:
         try:
             await last_msg.edit_reply_markup(reply_markup=None)
-        except:
-            pass
+        except: pass
     sent = await message.reply_text(text, reply_markup=film_keyboard(film['title'], user.id == ADMIN_ID))
     context.user_data["last_film_message"] = sent
 
@@ -186,19 +183,54 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=main_keyboard(user.id == ADMIN_ID)
     )
 
+# ===== Текстовий хендлер =====
+async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    update_user_stats(user)
+    text = update.message.text if update.message else ""
+    await show_film(update, context, text)
+
+# ===== Розіграш =====
+async def raffle(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    update_user_stats(user)
+    message = get_message(update)
+    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("✅ Взяти участь", callback_data="raffle_join")]])
+    await message.reply_text(
+        "🎁 Розіграш MEGOGO!\n\nНатисніть кнопку нижче, щоб взяти участь у розіграші максимальної підписки.",
+        reply_markup=keyboard
+    )
+
+async def raffle_join_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    user_id = str(query.from_user.id)
+    user_stats[user_id]["raffle"] = True
+    await save_user_stats_async()
+    await query.message.edit_text("✅ Ви успішно взяли участь у розіграші MEGOGO!")
+
+# ===== Callback handler =====
+async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+    if data == "random_film":
+        await random_film(update, context)
+    elif data == "raffle":
+        await raffle(update, context)
+    elif data == "raffle_join":
+        await raffle_join_handler(update, context)
+
 # ===== MAIN =====
 async def main_async():
     app = ApplicationBuilder().token(TOKEN).build()
     await app.bot.delete_webhook(drop_pending_updates=True)
 
-    # Хендлери
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
 
-    # Scheduler
     scheduler = AsyncIOScheduler()
-    scheduler.add_job(monthly_raffle, CronTrigger(day=1, hour=0, minute=0), args=[app])
     scheduler.start()
 
     await app.run_polling()

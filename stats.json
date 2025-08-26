@@ -87,5 +87,10 @@
     "username": "oleg_grnk",
     "first_name": "Олег",
     "raffle": true
+  },
+  "570223998": {
+    "username": "nika_rechyts",
+    "first_name": "Nika",
+    "raffle": false
   }
 }
